@@ -1,0 +1,307 @@
+
+import { randomUUID } from 'crypto';
+import {
+  TradingConfig,
+  Position,
+  PositionUpdate,
+  ExitCondition,
+} from './types';
+
+export class PositionManager {
+  private positions: Map<string, Position> = new Map();
+  private config: TradingConfig;
+
+  constructor(config: TradingConfig) {
+    this.config = config;
+  }
+
+  openPosition(
+    tokenMint: string,
+    entryPrice: number,
+    quantity: number,
+    entryTx?: string,
+  ): Position {
+    if (!this.canOpenPosition()) {
+      throw new Error(
+        `Maximum open positions reached: ${this.config.maxOpenPositions}`,
+      );
+    }
+
+    if (!Number.isFinite(entryPrice) || entryPrice <= 0) {
+      throw new Error(`Invalid entry price: ${entryPrice}`);
+    }
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new Error(`Invalid quantity: ${quantity}`);
+    }
+
+    const position: Position = {
+      id: randomUUID(),
+      tokenMint,
+      entryPrice,
+      entryTime: new Date(),
+      quantity,
+      entryTx: entryTx ?? null,
+      currentPrice: entryPrice,
+      unrealizedPnl: 0,
+      realizedPnl: 0,
+
+      stopLoss:
+        entryPrice *
+        (1 - this.config.stopLossPercent / 100),
+
+      takeProfit:
+        entryPrice *
+        (1 + this.config.takeProfitPercent / 100),
+
+      trailingStop:
+        entryPrice *
+        (1 - this.config.trailingStopPercent / 100),
+
+      trailingStopHighPrice: entryPrice,
+
+      profitLockActive: false,
+      aggressiveTrailingActive: false,
+
+      exitReason: null,
+      exitTx: null,
+      fees: 0,
+      slippage: 0,
+      status: 'open',
+    };
+
+    this.positions.set(position.id, position);
+
+    return position;
+  }
+
+  updatePosition(
+    id: string,
+    currentPrice: number,
+  ): PositionUpdate {
+    const position = this.positions.get(id);
+
+    if (!position) {
+      throw new Error(`Position ${id} not found`);
+    }
+
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+      throw new Error(
+        `Invalid current price: ${currentPrice}`,
+      );
+    }
+
+    if (position.status !== 'open') {
+      return {
+        positionId: id,
+        currentPrice: position.currentPrice,
+        unrealizedPnl: position.unrealizedPnl,
+        exitConditions: [],
+      };
+    }
+
+    position.currentPrice = currentPrice;
+
+    position.unrealizedPnl = this.calculatePnl(
+      position.entryPrice,
+      currentPrice,
+      position.quantity,
+    );
+
+    const profitPercent =
+      ((currentPrice - position.entryPrice) /
+        position.entryPrice) *
+      100;
+
+    if (
+      profitPercent >=
+      this.config.profitLockActivationPercent
+    ) {
+      position.profitLockActive = true;
+
+      const lockedPrice =
+        position.entryPrice *
+        (1 + this.config.profitLockPercent / 100);
+
+      if (lockedPrice > position.stopLoss) {
+        position.stopLoss = lockedPrice;
+      }
+    }
+
+    if (
+      currentPrice >
+      position.trailingStopHighPrice
+    ) {
+      position.trailingStopHighPrice = currentPrice;
+    }
+
+    if (
+      profitPercent >=
+      this.config.aggressiveTrailingActivationPercent
+    ) {
+      position.aggressiveTrailingActive = true;
+    }
+
+    if (position.aggressiveTrailingActive) {
+      const aggressiveStop =
+        position.trailingStopHighPrice *
+        (1 - this.config.trailingStopPercent / 100);
+
+      if (aggressiveStop > position.trailingStop) {
+        position.trailingStop = aggressiveStop;
+      }
+
+      if (position.trailingStop > position.stopLoss) {
+        position.stopLoss = position.trailingStop;
+      }
+    } else {
+      const normalTrailingStop =
+        position.trailingStopHighPrice *
+        (1 - this.config.trailingStopPercent / 100);
+
+      if (
+        normalTrailingStop >
+        position.trailingStop
+      ) {
+        position.trailingStop = normalTrailingStop;
+      }
+
+      if (
+        position.trailingStop >
+        position.stopLoss
+      ) {
+        position.stopLoss = position.trailingStop;
+      }
+    }
+
+    const exitConditions: ExitCondition[] = [
+      this.checkTakeProfit(position),
+      this.checkStopLoss(position),
+      this.checkTimeExit(position),
+    ];
+
+    return {
+      positionId: id,
+      currentPrice,
+      unrealizedPnl: position.unrealizedPnl,
+      exitConditions,
+    };
+  }
+
+  closePosition(
+    id: string,
+    exitPrice: number,
+    exitReason: string,
+    exitTx?: string,
+  ): Position {
+    const position = this.positions.get(id);
+
+    if (!position) {
+      throw new Error(`Position ${id} not found`);
+    }
+
+    if (position.status === 'closed') {
+      return position;
+    }
+
+    if (!Number.isFinite(exitPrice) || exitPrice <= 0) {
+      throw new Error(
+        `Invalid exit price: ${exitPrice}`,
+      );
+    }
+
+    position.currentPrice = exitPrice;
+
+    position.realizedPnl = this.calculatePnl(
+      position.entryPrice,
+      exitPrice,
+      position.quantity,
+    );
+
+    position.unrealizedPnl = 0;
+    position.exitReason = exitReason;
+    position.exitTx = exitTx ?? null;
+    position.status = 'closed';
+
+    return position;
+  }
+
+  getPosition(
+    id: string,
+  ): Position | undefined {
+    return this.positions.get(id);
+  }
+
+  getOpenPositions(): Position[] {
+    return Array.from(this.positions.values()).filter(
+      (position) => position.status === 'open',
+    );
+  }
+
+  canOpenPosition(): boolean {
+    return (
+      this.getOpenPositions().length <
+      this.config.maxOpenPositions
+    );
+  }
+
+  calculatePnl(
+    entry: number,
+    current: number,
+    quantity: number,
+  ): number {
+    return (current - entry) * quantity;
+  }
+
+  private checkTakeProfit(
+    position: Position,
+  ): ExitCondition {
+    return {
+      type: 'take_profit',
+      triggered:
+        position.currentPrice >=
+        position.takeProfit,
+      value: position.takeProfit,
+    };
+  }
+
+  private checkStopLoss(
+    position: Position,
+  ): ExitCondition {
+    return {
+      type: 'stop_loss',
+      triggered:
+        position.currentPrice <=
+        position.stopLoss,
+      value: position.stopLoss,
+    };
+  }
+
+
+  private checkTrailingStop(
+    position: Position,
+  ): ExitCondition {
+    return {
+      type: 'trailing_stop',
+      triggered:
+        position.currentPrice <= position.trailingStop,
+      value: position.trailingStop,
+    };
+  }
+  private checkTimeExit(
+    position: Position,
+  ): ExitCondition {
+    const holdSeconds =
+      (Date.now() -
+        position.entryTime.getTime()) /
+      1000;
+
+    return {
+      type: 'time_exit',
+      triggered:
+        holdSeconds >=
+        this.config.maxHoldSeconds,
+      value: holdSeconds,
+    };
+  }
+}

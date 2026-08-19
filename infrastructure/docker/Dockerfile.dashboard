@@ -1,0 +1,23 @@
+FROM node:22-alpine AS builder
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY packages ./packages
+COPY apps/dashboard/package.json ./apps/dashboard/package.json
+
+RUN corepack enable && pnpm install --frozen-lockfile
+
+COPY apps/dashboard ./apps/dashboard
+RUN pnpm --filter optik-mayhem-terminal build
+
+FROM node:22-alpine
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/apps/dashboard ./apps/dashboard
+
+USER node
+EXPOSE 3000
+CMD ["pnpm", "--filter", "optik-mayhem-terminal", "preview", "--host", "0.0.0.0", "--port", "3000"]

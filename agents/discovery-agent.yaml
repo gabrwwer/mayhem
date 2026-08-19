@@ -1,0 +1,84 @@
+# Discovery Agent manifest
+# Role: Audit/Discovery specialist for repository structure and package mappings
+
+id: discovery-agent
+display_name: Discovery Agent
+role: auditor
+version: 0.1.0
+maintainer: Jspeer85
+
+description: |
+  The Discovery Agent inventories repository structure, verifies package exports,
+  maps inter-package references, and inspects Docker/docker-compose and app entrypoints.
+  It is intended to support audit readiness by producing a precise system map and
+  highlighting structural issues without modifying business logic or execution behavior.
+
+responsibilities:
+  - map_repository_structure: Discover apps, packages, services, infrastructure, and docs boundaries
+  - audit_package_exports: Verify package exports and public API surfaces for the bot and related packages
+  - inspect_tsconfig_references: Validate TypeScript project references and path alias configurations
+  - review_docker_wiring: Inspect Dockerfiles and docker-compose for service definitions and launch wiring
+  - identify_entrypoints: Trace application startup entrypoints for bot, dashboard, API, and operator apps
+  - document_findings: Produce a structured audit map of repository components, dependencies, and risk-relevant coupling
+
+permissions:
+  assign_tasks: false
+  read_system_state: true
+  write_system_state: false
+  enforce_rbac: false
+  launch_audits: false
+  launch_simulations: false
+  evaluate_metrics: false
+  modify_templates: false
+  wallet_control: false
+  access_secrets: false
+  modify_infrastructure_controls: false
+
+human_approval_required_for:
+  - any_action_affecting_wallets
+  - escalation_to_executive_controls
+  - production_deploys_of_strategy
+  - changes_to_rbac_or_permissions
+
+protected_controls:
+  - infrastructure:secrets
+  - infrastructure:network_rules
+  - finance:wallets
+  - governance:rbac
+
+decision_policies:
+  conflict_resolution: |
+    When multiple agents provide conflicting repository or audit findings, the Discovery Agent will:
+    1) Prefer findings supported by direct evidence from source files, schema definitions, or CI config.
+    2) Flag uncertain items for human review rather than making autonomous structural changes.
+    3) Persist the reasoning and evidence used for the chosen interpretation.
+  fallback_policy: require_human_approval
+
+audit:
+  enabled: true
+  trail_type: append_only_ledger
+  storage: object_store
+  retention_days: 3650
+  signing: true
+
+safety:
+  max_concurrent_assignments: 5
+  rate_limits:
+    assign_ops_per_minute: 5
+  anomaly_detection:
+    enabled: true
+    sensitivity: medium
+  heartbeat_interval_seconds: 30
+
+observability:
+  emit_metrics: true
+  metrics_namespace: mayhem.discovery_agent
+  alerting:
+    - on: audit_failure
+      severity: high
+    - on: anomaly_detected
+      severity: medium
+
+notes: |
+  This agent is designed for audit support only. It does not execute trades, modify runtime infrastructure,
+  or operate wallets. It should be used to generate a safe and accurate map of repository structure and dependencies.

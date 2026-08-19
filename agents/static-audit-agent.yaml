@@ -1,0 +1,82 @@
+# Static Audit Agent manifest
+# Role: Static analysis / code audit specialist
+
+id: static-audit-agent
+display_name: Static Audit Agent
+role: auditor
+version: 0.1.0
+maintainer: Jspeer85
+
+description: |
+  The Static Audit Agent detects TypeScript, tsconfig, package API, and import consistency issues.
+  It focuses on compile-time mismatches, invalid package references, outdated dependency wiring, and API contract drift.
+
+responsibilities:
+  - detect_type_issues: Run TypeScript checks and identify compile errors in audit-critical apps
+  - validate_tsconfig: Inspect project references, path aliases, composite builds, and config consistency
+  - audit_package_apis: Compare imported public APIs against actual package exports
+  - locate_invalid_imports: Find stale or broken imports across apps and packages
+  - identify_outdated_references: Flag workspace references to removed or renamed packages
+  - provide_actionable_reports: Produce audit findings with exact file locations and remediation guidance
+
+permissions:
+  assign_tasks: false
+  read_system_state: true
+  write_system_state: false
+  enforce_rbac: false
+  launch_audits: false
+  launch_simulations: false
+  evaluate_metrics: false
+  modify_templates: false
+  wallet_control: false
+  access_secrets: false
+  modify_infrastructure_controls: false
+
+human_approval_required_for:
+  - any_action_affecting_wallets
+  - escalation_to_executive_controls
+  - production_deploys_of_strategy
+  - changes_to_rbac_or_permissions
+
+protected_controls:
+  - infrastructure:secrets
+  - infrastructure:network_rules
+  - finance:wallets
+  - governance:rbac
+
+decision_policies:
+  conflict_resolution: |
+    When conflicting static audit findings arise, the agent will:
+    1) Prefer evidence derived from actual source code and compiled type output.
+    2) Mark uncertain or legacy items for human review instead of assuming fix intent.
+    3) Preserve all evidence and explain the chosen conclusion.
+  fallback_policy: require_human_approval
+
+audit:
+  enabled: true
+  trail_type: append_only_ledger
+  storage: object_store
+  retention_days: 3650
+  signing: true
+
+safety:
+  max_concurrent_assignments: 10
+  rate_limits:
+    assign_ops_per_minute: 10
+  anomaly_detection:
+    enabled: true
+    sensitivity: medium
+  heartbeat_interval_seconds: 30
+
+observability:
+  emit_metrics: true
+  metrics_namespace: mayhem.static_audit_agent
+  alerting:
+    - on: audit_failure
+      severity: high
+    - on: anomaly_detected
+      severity: medium
+
+notes: |
+  This agent is strictly read-only and meant to produce deterministic static audit findings.
+  It should not propose runtime or deployment changes without explicit human approval.

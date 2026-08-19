@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "types": ["node", "vitest/globals"],
+
+    /*
+     * No `paths` mapping for @mayhem/*.
+     *
+     * A temporary bridge lived here while the workspace packages were
+     * missing from `packages/` and their sources survived only inside
+     * node_modules. Now that packages/* is restored and pnpm links them,
+     * resolution is native — and native is strictly better: a `paths` entry
+     * that disagrees with what the package manager actually links means the
+     * type checker and the runtime are reading different files.
+     */
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "exactOptionalPropertyTypes": true,
+    "useUnknownInCatchVariables": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "incremental": true,
+    "skipLibCheck": true
+  }
+}

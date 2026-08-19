@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build workspace
+        run: pnpm run build
+      - name: Lint
+        run: pnpm run lint:ci
+      - name: Format check
+        run: pnpm run format:check
+      - name: Validate agent manifests
+        run: pnpm run validate:manifests
+      - name: Test
+        run: pnpm run test:coverage
+
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Secret scan
+        run: pnpm run secret-scan
+      - name: Dependency audit
+        run: npm run audit:deps
+      - name: Generate SBOM
+        run: npm run sbom
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json

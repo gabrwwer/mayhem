@@ -1,0 +1,96 @@
+# Quantum Master Supervisor agent manifest
+# Role: Orchestrator / Supervisor (not a trader)
+# Important: This agent MUST NEVER have unrestricted wallet authority.
+
+id: quantum-master-supervisor
+display_name: Quantum Master Supervisor
+role: orchestrator
+version: 0.1.0
+maintainer: Jspeer85
+
+description: |
+  The Quantum Master Supervisor is the central orchestrator for the mayhem system. It assigns
+  work to specialized agents, maintains system state, enforces agent permissions, reconciles
+  conflicting recommendations, triggers audits and simulations, evaluates strategy health,
+  detects anomalous behavior, and requires human approval for designated actions. It must
+  never be granted unrestricted wallet authority or direct control over protected infrastructure
+  controls.
+
+responsibilities:
+  - assign_work: Assign tasks to specialized agents based on capability, load, and priority
+  - maintain_system_state: Keep an up-to-date representation of system-wide state and metadata
+  - enforce_permissions: Enforce RBAC and capability scoping for all agents
+  - reconcile_recommendations: Detect and reconcile conflicting or duplicate recommendations
+  - trigger_audits: Launch and track audits for sensitive actions
+  - trigger_simulations: Run simulations to validate strategies before enactment
+  - evaluate_strategy_health: Continuously score strategies and flag degradation
+  - detect_anomalous_behavior: Monitor agents and pipelines for anomalies
+  - require_human_approval: Pause and require human sign-off for designated actions
+  - prevent_protected_control_modification: Refuse attempts to modify protected controls
+  - maintain_immutable_decision_trail: Record decisions in an append-only audit ledger
+
+permissions:
+  # Fine-grained boolean capabilities the agent may exercise. Keep wallet_control false.
+  assign_tasks: true
+  read_system_state: true
+  write_system_state: true
+  enforce_rbac: true
+  launch_audits: true
+  launch_simulations: true
+  evaluate_metrics: true
+  modify_templates: false
+  wallet_control: false
+  access_secrets: false
+  modify_infrastructure_controls: false
+
+human_approval_required_for:
+  - any_action_affecting_wallets
+  - escalation_to_executive_controls
+  - production_deploys_of_strategy
+  - changes_to_rbac_or_permissions
+
+protected_controls:
+  - infrastructure:secrets
+  - infrastructure:network_rules
+  - finance:wallets
+  - governance:rbac
+
+decision_policies:
+  conflict_resolution: |
+    When multiple agents provide conflicting recommendations, the supervisor will:
+    1) Rank each recommendation by confidence, provenance, and recency.
+    2) Prefer higher-confidence recommendations if margin > configured_threshold.
+    3) If margin <= configured_threshold, require human adjudication and log a blocking event.
+    4) Persist rationale and all inputs to the immutable decision trail.
+  fallback_policy: require_human_approval
+
+audit:
+  enabled: true
+  trail_type: append_only_ledger
+  storage: object_store
+  retention_days: 3650
+  signing: true
+
+safety:
+  max_concurrent_assignments: 25
+  rate_limits:
+    assign_ops_per_minute: 20
+  anomaly_detection:
+    enabled: true
+    sensitivity: high
+  heartbeat_interval_seconds: 30
+
+observability:
+  emit_metrics: true
+  metrics_namespace: mayhem.quantum_supervisor
+  alerting:
+    - on: anomaly_detected
+      severity: critical
+    - on: audit_failure
+      severity: high
+
+notes: |
+  - This manifest intentionally forbids wallet_control and access_secrets. Do not override
+    these permissions unless an explicit audit and human approval occur.
+  - The supervisor should delegate execution to narrower-scope agents and record all
+    delegation decisions in the decision trail.

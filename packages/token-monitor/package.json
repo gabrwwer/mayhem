@@ -1,0 +1,32 @@
+{
+  "name": "@mayhem/token-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Token discovery, liquidity, and mempool monitoring providers.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./*": "./src/*.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "clean": "tsc --build tsconfig.build.json --clean"
+  },
+  "dependencies": {
+    "@mayhem/solana": "workspace:*",
+    "@raydium-io/raydium-sdk-v2": "0.2.59-alpha",
+    "@solana/web3.js": "^1.95.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

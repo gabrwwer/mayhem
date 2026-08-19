@@ -1,0 +1,47 @@
+.tokens-page {
+  padding: 16px;
+}
+.tokens-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.tokens-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tokens-controls input {
+  background: #111;
+  color: #eee;
+  border: 1px solid #222;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.tokens-table-wrapper {
+  overflow: auto;
+  background: linear-gradient(#0b0b0b, #0f0f0f);
+  border-radius: 8px;
+  padding: 8px;
+}
+.tokens-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: #ddd;
+}
+.tokens-table th,
+.tokens-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid #161616;
+}
+.tokens-table thead th {
+  font-weight: 600;
+  cursor: pointer;
+}
+.token-cell .token-symbol {
+  font-weight: 700;
+}
+.positive { color: #5ee89f; }
+.negative { color: #ff7b7b; }

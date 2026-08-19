@@ -1,0 +1,30 @@
+
+{
+  "name": "@mayhem/config",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Single-source environment schema and typed runtime config for the Mayhem bot.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+    ,"./*": "./src/*.ts"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "clean": "tsc --build tsconfig.build.json --clean"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

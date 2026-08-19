@@ -1,0 +1,26 @@
+
+{
+  "name": "@mayhem/accounting",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Accounting and ledgering for fills, fees, and P&L.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+    ,"./*": "./src/*.ts"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "clean": "tsc --build tsconfig.build.json --clean"
+  },
+  "dependencies": {
+    "@mayhem/core-types": "workspace:*"
+  }
+}

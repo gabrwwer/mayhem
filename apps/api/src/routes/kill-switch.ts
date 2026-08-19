@@ -1,0 +1,1 @@
+export const killSwitchRoute = { path: "/api/kill-switch" };

@@ -1,0 +1,39 @@
+
+> @mayhem/token-monitor@1.0.0 build C:\Users\optik\OneDrive\Pictures\Desktop\mayhem\mq\packages\token-monitor
+> tsc --build tsconfig.build.json
+
+src/raydium-pool-verifier.ts(234,22): error TS4111: Property 'mintA' comes from an index signature, so it must be accessed with ['mintA'].
+src/raydium-pool-verifier.ts(234,46): error TS4111: Property 'baseMint' comes from an index signature, so it must be accessed with ['baseMint'].
+src/raydium-pool-verifier.ts(238,22): error TS4111: Property 'mintB' comes from an index signature, so it must be accessed with ['mintB'].
+src/raydium-pool-verifier.ts(238,46): error TS4111: Property 'quoteMint' comes from an index signature, so it must be accessed with ['quoteMint'].
+src/raydium-pool-verifier.ts(242,22): error TS4111: Property 'vaultA' comes from an index signature, so it must be accessed with ['vaultA'].
+src/raydium-pool-verifier.ts(243,24): error TS4111: Property 'baseVault' comes from an index signature, so it must be accessed with ['baseVault'].
+src/raydium-pool-verifier.ts(244,23): error TS4111: Property 'vaultA' comes from an index signature, so it must be accessed with ['vaultA'].
+src/raydium-pool-verifier.ts(245,23): error TS4111: Property 'baseVault' comes from an index signature, so it must be accessed with ['baseVault'].
+src/raydium-pool-verifier.ts(249,22): error TS4111: Property 'vaultB' comes from an index signature, so it must be accessed with ['vaultB'].
+src/raydium-pool-verifier.ts(250,24): error TS4111: Property 'quoteVault' comes from an index signature, so it must be accessed with ['quoteVault'].
+src/raydium-pool-verifier.ts(251,23): error TS4111: Property 'vaultB' comes from an index signature, so it must be accessed with ['vaultB'].
+src/raydium-pool-verifier.ts(252,23): error TS4111: Property 'quoteVault' comes from an index signature, so it must be accessed with ['quoteVault'].
+src/raydium-pool-verifier.ts(256,22): error TS4111: Property 'lpMint' comes from an index signature, so it must be accessed with ['lpMint'].
+src/raydium-pool-verifier.ts(256,46): error TS4111: Property 'lpMint' comes from an index signature, so it must be accessed with ['lpMint'].
+src/raydium-pool-verifier.ts(260,22): error TS4111: Property 'mintA' comes from an index signature, so it must be accessed with ['mintA'].
+src/raydium-pool-verifier.ts(260,46): error TS4111: Property 'baseMint' comes from an index signature, so it must be accessed with ['baseMint'].
+src/raydium-pool-verifier.ts(264,22): error TS4111: Property 'mintB' comes from an index signature, so it must be accessed with ['mintB'].
+src/raydium-pool-verifier.ts(264,46): error TS4111: Property 'quoteMint' comes from an index signature, so it must be accessed with ['quoteMint'].
+src/raydium-pool-verifier.ts(283,21): error TS4111: Property 'baseReserve' comes from an index signature, so it must be accessed with ['baseReserve'].
+src/raydium-pool-verifier.ts(284,23): error TS4111: Property 'reserveA' comes from an index signature, so it must be accessed with ['reserveA'].
+src/raydium-pool-verifier.ts(285,23): error TS4111: Property 'mintAReserve' comes from an index signature, so it must be accessed with ['mintAReserve'].
+src/raydium-pool-verifier.ts(290,21): error TS4111: Property 'quoteReserve' comes from an index signature, so it must be accessed with ['quoteReserve'].
+src/raydium-pool-verifier.ts(291,23): error TS4111: Property 'reserveB' comes from an index signature, so it must be accessed with ['reserveB'].
+src/raydium-pool-verifier.ts(292,23): error TS4111: Property 'mintBReserve' comes from an index signature, so it must be accessed with ['mintBReserve'].
+src/raydium-pool-verifier.ts(362,25): error TS4111: Property 'address' comes from an index signature, so it must be accessed with ['address'].
+src/raydium-pool-verifier.ts(362,56): error TS4111: Property 'address' comes from an index signature, so it must be accessed with ['address'].
+src/raydium-pool-verifier.ts(363,23): error TS4111: Property 'address' comes from an index signature, so it must be accessed with ['address'].
+src/raydium-pool-verifier.ts(367,16): error TS4111: Property 'address' comes from an index signature, so it must be accessed with ['address'].
+src/raydium-pool-verifier.ts(368,23): error TS4111: Property 'address' comes from an index signature, so it must be accessed with ['address'].
+src/raydium-pool-verifier.ts(369,24): error TS4111: Property 'address' comes from an index signature, so it must be accessed with ['address'].
+src/raydium-pool-verifier.ts(373,18): error TS4111: Property 'address' comes from an index signature, so it must be accessed with ['address'].
+src/raydium-pool-verifier.ts(397,36): error TS4111: Property 'decimals' comes from an index signature, so it must be accessed with ['decimals'].
+C:\Users\optik\OneDrive\Pictures\Desktop\mayhem\mq\packages\token-monitor:
+ΓÇëERR_PNPM_RECURSIVE_RUN_FIRST_FAILΓÇë @mayhem/token-monitor@1.0.0 build: `tsc --build tsconfig.build.json`
+Exit status 1

@@ -1,0 +1,1 @@
+Directory retained from previous mayhem-bot import; security docs live in `infrastructure/security`.

@@ -1,0 +1,1 @@
+export const positionsRoute = { path: "/api/positions" };

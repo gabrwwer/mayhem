@@ -1,0 +1,3 @@
+# Strategies
+
+Placeholder strategy documentation.

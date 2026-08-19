@@ -1,0 +1,466 @@
+/**
+ * MAYHEM application shell — status bar, navigation rail, content region.
+ *
+ * Layout is a fixed viewport grid. The shell owns all scrolling so panels can
+ * be independently scrollable and tables never push the page wider than the
+ * viewport.
+ */
+
+.mh-shell {
+  display: grid;
+  grid-template-rows: var(--statusbar-h) 1fr;
+  grid-template-columns: var(--rail-w) 1fr;
+  grid-template-areas:
+    "status status"
+    "rail   main";
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--surface-0);
+}
+
+.mh-shell[data-rail="collapsed"] {
+  grid-template-columns: var(--rail-w-collapsed) 1fr;
+}
+
+/* ============================================================
+   Status bar
+   ============================================================ */
+
+.mh-statusbar {
+  grid-area: status;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line-strong);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* The bar is the one place a LIVE state must be impossible to miss. */
+.mh-statusbar[data-mode="live"] {
+  border-bottom-color: var(--red);
+  box-shadow: inset 0 -2px 0 var(--red);
+}
+
+.mh-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-5);
+  border-right: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.mh-brand__mark {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--line-accent);
+  border-radius: var(--radius);
+  background: var(--blue-wash);
+  color: var(--blue-bright);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 800;
+}
+
+.mh-brand__name {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  color: var(--text);
+}
+
+/* ---------- Status cells ---------- */
+
+.mh-scell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  padding: 0 var(--sp-5);
+  border-right: 1px solid var(--line);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.mh-scell__label {
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.mh-scell__value {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.mh-scell__value[data-tone="ok"] {
+  color: var(--green);
+}
+.mh-scell__value[data-tone="bad"] {
+  color: var(--red);
+}
+.mh-scell__value[data-tone="warn"] {
+  color: var(--amber);
+}
+.mh-scell__value[data-tone="info"] {
+  color: var(--cyan);
+}
+.mh-scell__value[data-tone="muted"] {
+  color: var(--text-faint);
+}
+
+/* ---------- Mode indicator (DRY RUN vs LIVE) ---------- */
+
+.mh-mode {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-6);
+  border-right: 1px solid var(--line);
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: 800;
+  letter-spacing: 0.2em;
+}
+
+/* Simulated: violet, calm, explicitly labelled. */
+.mh-mode[data-mode="dry"] {
+  color: var(--violet);
+  background: var(--violet-wash);
+  box-shadow: inset 0 0 0 1px rgba(139, 92, 246, 0.35);
+}
+
+/* Live: red, animated, unmistakable. Nothing else in the app uses this. */
+.mh-mode[data-mode="live"] {
+  color: #fff;
+  background: var(--red);
+  box-shadow: var(--glow-red);
+  animation: mh-live 1.8s ease-in-out infinite;
+}
+
+/* Unknown: we could not read the flag. Never assume dry-run. */
+.mh-mode[data-mode="unknown"] {
+  color: var(--amber);
+  background: var(--amber-wash);
+  box-shadow: inset 0 0 0 1px rgba(255, 176, 32, 0.4);
+}
+
+@keyframes mh-live {
+  0%,
+  100% {
+    box-shadow: var(--glow-red);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(255, 77, 77, 0.6), 0 0 22px rgba(255, 77, 77, 0.45);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mh-mode[data-mode="live"] {
+    animation: none;
+  }
+}
+
+.mh-statusbar__actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-5);
+  border-left: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+/* ============================================================
+   Navigation rail
+   ============================================================ */
+
+.mh-rail {
+  grid-area: rail;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-1);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+}
+
+.mh-rail__group {
+  padding: var(--sp-4) 0 var(--sp-2);
+}
+
+.mh-rail__grouplabel {
+  padding: 0 var(--sp-5) var(--sp-2);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.mh-shell[data-rail="collapsed"] .mh-rail__grouplabel {
+  display: none;
+}
+
+.mh-navitem {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  width: 100%;
+  height: var(--row-h);
+  padding: 0 var(--sp-5);
+  border: none;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.mh-navitem:hover {
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+
+.mh-navitem[aria-current="page"] {
+  background: var(--blue-wash);
+  border-left-color: var(--blue);
+  color: var(--blue-bright);
+}
+
+.mh-navitem__key {
+  width: 14px;
+  flex: 0 0 auto;
+  text-align: center;
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+}
+
+.mh-navitem[aria-current="page"] .mh-navitem__key {
+  color: var(--blue);
+}
+
+.mh-navitem__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mh-shell[data-rail="collapsed"] .mh-navitem__label {
+  display: none;
+}
+
+.mh-navitem__badge {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  color: var(--text-dim);
+  background: var(--surface-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  padding: 0 var(--sp-2);
+  min-width: 16px;
+  text-align: center;
+}
+
+.mh-shell[data-rail="collapsed"] .mh-navitem__badge {
+  display: none;
+}
+
+.mh-rail__foot {
+  margin-top: auto;
+  padding: var(--sp-4) var(--sp-5);
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+}
+
+/* ============================================================
+   Main content region
+   ============================================================ */
+
+.mh-main {
+  grid-area: main;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.mh-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mh-page__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  flex: 0 0 auto;
+  height: var(--row-h-lg);
+  padding: 0 var(--sp-5);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+}
+
+.mh-page__title {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.mh-page__sub {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-mute);
+  letter-spacing: 0.06em;
+}
+
+.mh-page__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  padding: var(--sp-4);
+}
+
+.mh-page__body--flush {
+  padding: 0;
+}
+
+/* ---------- Dashboard grid ---------- */
+
+.mh-dash {
+  display: grid;
+  gap: var(--sp-4);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  align-content: start;
+}
+
+.mh-dash > .span-3 {
+  grid-column: span 3;
+}
+.mh-dash > .span-4 {
+  grid-column: span 4;
+}
+.mh-dash > .span-5 {
+  grid-column: span 5;
+}
+.mh-dash > .span-6 {
+  grid-column: span 6;
+}
+.mh-dash > .span-7 {
+  grid-column: span 7;
+}
+.mh-dash > .span-8 {
+  grid-column: span 8;
+}
+.mh-dash > .span-12 {
+  grid-column: span 12;
+}
+
+.mh-dash .h-sm {
+  min-height: 180px;
+  max-height: 240px;
+}
+.mh-dash .h-md {
+  min-height: 260px;
+  max-height: 340px;
+}
+.mh-dash .h-lg {
+  min-height: 340px;
+}
+
+/* ============================================================
+   Responsive — desktop first, degrade without destroying density
+   ============================================================ */
+
+/* Laptop */
+@media (max-width: 1600px) {
+  .mh-dash > .span-3 {
+    grid-column: span 4;
+  }
+}
+
+/* Narrow laptop / large tablet */
+@media (max-width: 1280px) {
+  :root {
+    --rail-w: 152px;
+  }
+  .mh-dash > .span-4,
+  .mh-dash > .span-5 {
+    grid-column: span 6;
+  }
+  .mh-dash > .span-7,
+  .mh-dash > .span-8 {
+    grid-column: span 12;
+  }
+}
+
+/* Tablet */
+@media (max-width: 1024px) {
+  .mh-dash > .span-3 {
+    grid-column: span 6;
+  }
+  .mh-dash > .span-6 {
+    grid-column: span 12;
+  }
+}
+
+/* Mobile — rail collapses to icons; tables keep their columns and scroll. */
+@media (max-width: 720px) {
+  .mh-shell,
+  .mh-shell[data-rail="collapsed"] {
+    grid-template-columns: var(--rail-w-collapsed) 1fr;
+  }
+  .mh-rail__grouplabel,
+  .mh-navitem__label,
+  .mh-navitem__badge {
+    display: none;
+  }
+  .mh-dash > [class*="span-"] {
+    grid-column: span 12;
+  }
+  .mh-brand__name {
+    display: none;
+  }
+}

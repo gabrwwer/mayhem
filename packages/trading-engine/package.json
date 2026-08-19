@@ -1,0 +1,24 @@
+
+{
+  "name": "@mayhem/trading-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Position management, exit strategy, and portfolio engine.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+    ,"./*": "./src/*.ts"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "clean": "tsc --build tsconfig.build.json --clean",
+    "test": "vitest run --config ../../vitest.config.mts"
+  }
+}

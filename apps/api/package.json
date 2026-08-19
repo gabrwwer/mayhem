@@ -1,0 +1,32 @@
+{
+  "name": "@mayhem/api",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "ts-node --transpile-only src/index.ts",
+    "test": "pnpm -w exec vitest run ./test/api-contract.test.ts --run --reporter verbose",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.95.0",
+    "@mayhem/config": "workspace:*",
+    "@mayhem/database": "workspace:*",
+    "@mayhem/risk-engine": "workspace:*",
+    "@mayhem/solana": "workspace:*",
+    "@mayhem/token-monitor": "workspace:*",
+    "@mayhem/trading-engine": "workspace:*",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.19.0",
+    "express-ws": "^5.0.2",
+    "helmet": "^7.1.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.0"
+  }
+}

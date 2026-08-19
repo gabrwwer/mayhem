@@ -1,0 +1,873 @@
+/**
+ * MAYHEM design system — single source of truth for colour, density and type.
+ *
+ * Target: professional trading terminal / operator console.
+ * Non-goals: marketing site, SaaS dashboard, rounded bubble UI.
+ *
+ * Rules for anyone editing this file:
+ *   - No hardcoded hex outside this file. Use the variables.
+ *   - Radii stay <= 4px. Padding stays on the density scale below.
+ *   - Status colour is semantic, never decorative:
+ *       green = positive / safe, red = negative / danger,
+ *       amber = warning, blue+cyan = informational / live.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ---------- Surfaces (near-black -> charcoal) ---------- */
+  --surface-0: #05070a; /* app background */
+  --surface-1: #0a0d12; /* panel */
+  --surface-2: #0f1319; /* panel header, table header */
+  --surface-3: #151a22; /* input, raised row */
+  --surface-4: #1c222c; /* hover / selected row */
+
+  /* ---------- Borders (thin, low contrast) ---------- */
+  --line: #1b212b;
+  --line-strong: #2a323f;
+  --line-accent: rgba(0, 132, 255, 0.45);
+
+  /* ---------- Text ---------- */
+  --text: #dfe6f0;
+  --text-dim: #9aa7b8;
+  --text-mute: #64707f;
+  --text-faint: #3f4854;
+
+  /* ---------- Primary / secondary ---------- */
+  --blue: #0084ff; /* electric blue — primary */
+  --blue-bright: #3aa0ff;
+  --blue-wash: rgba(0, 132, 255, 0.12);
+  --cyan: #00d5e0; /* secondary */
+  --cyan-wash: rgba(0, 213, 224, 0.12);
+
+  /* ---------- Status ---------- */
+  --green: #17c964;
+  --green-wash: rgba(23, 201, 100, 0.12);
+  --red: #ff4d4d;
+  --red-wash: rgba(255, 77, 77, 0.12);
+  --amber: #ffb020;
+  --amber-wash: rgba(255, 176, 32, 0.12);
+  --violet: #8b5cf6; /* dry-run / simulated */
+  --violet-wash: rgba(139, 92, 246, 0.14);
+
+  /* ---------- Typography ---------- */
+  --font-ui: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --fs-micro: 9px;
+  --fs-label: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-base: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 19px;
+  --fs-metric: 24px;
+
+  --track-label: 0.14em; /* letter-spacing for uppercase labels */
+  --track-tight: 0.02em;
+
+  /* ---------- Density scale ---------- */
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 6px;
+  --sp-4: 8px;
+  --sp-5: 12px;
+  --sp-6: 16px;
+  --sp-7: 20px;
+  --sp-8: 24px;
+
+  --row-h: 26px; /* dense table row */
+  --row-h-lg: 32px;
+  --statusbar-h: 40px;
+  --rail-w: 176px;
+  --rail-w-collapsed: 48px;
+
+  /* ---------- Geometry ---------- */
+  --radius: 2px;
+  --radius-lg: 4px;
+
+  /* ---------- Effects (restrained) ---------- */
+  --glow-blue: 0 0 0 1px rgba(0, 132, 255, 0.35), 0 0 12px rgba(0, 132, 255, 0.18);
+  --glow-red: 0 0 0 1px rgba(255, 77, 77, 0.4), 0 0 14px rgba(255, 77, 77, 0.22);
+  --grid-line: rgba(255, 255, 255, 0.018);
+
+  font-family: var(--font-ui);
+  font-size: var(--fs-base);
+}
+
+/* ============================================================
+   Base
+   ============================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--surface-0);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-base);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden; /* the shell owns scrolling, not the page */
+}
+
+/* Subtle operator-console grid. Deliberately near-invisible. */
+.mh-grid-bg {
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: var(--track-tight);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: var(--blue-wash);
+}
+
+/* Scrollbars — thin, terminal-like */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 0;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #39424f;
+}
+
+a {
+  color: var(--blue-bright);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* Operator preference from Settings, independent of the OS setting. */
+html[data-reduce-motion="true"] *,
+html[data-reduce-motion="true"] *::before,
+html[data-reduce-motion="true"] *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* Focus — visible without being decorative */
+:focus-visible {
+  outline: 1px solid var(--blue);
+  outline-offset: 1px;
+}
+
+/* ============================================================
+   Primitives
+   ============================================================ */
+
+/* ---------- Panel ---------- */
+
+.mh-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.mh-panel__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  height: var(--row-h-lg);
+  flex: 0 0 auto;
+  padding: 0 var(--sp-4);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.mh-panel__title {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.mh-panel__meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.06em;
+  color: var(--text-mute);
+}
+
+.mh-panel__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.mh-panel__body--pad {
+  padding: var(--sp-5);
+}
+
+/* ---------- Label / value ---------- */
+
+.mh-label {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+
+.mh-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.mh-pos {
+  color: var(--green);
+}
+.mh-neg {
+  color: var(--red);
+}
+.mh-warn {
+  color: var(--amber);
+}
+.mh-info {
+  color: var(--cyan);
+}
+
+/* ---------- Stat cell ---------- */
+
+.mh-stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-4) var(--sp-5);
+  border-right: 1px solid var(--line);
+  min-width: 0;
+}
+.mh-stat:last-child {
+  border-right: none;
+}
+
+.mh-stat__label {
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-mute);
+  white-space: nowrap;
+}
+
+.mh-stat__value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.mh-stat__value--lg {
+  font-size: var(--fs-metric);
+}
+
+.mh-stat__sub {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-mute);
+  white-space: nowrap;
+}
+
+.mh-statrow {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* ---------- Dense table ---------- */
+
+.mh-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--fs-sm);
+}
+
+.mh-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: var(--row-h);
+  padding: 0 var(--sp-4);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line-strong);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  text-align: left;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.mh-table thead th[data-sortable="true"] {
+  cursor: pointer;
+}
+.mh-table thead th[data-sortable="true"]:hover {
+  color: var(--text-dim);
+  background: var(--surface-3);
+}
+.mh-table thead th[data-sorted="true"] {
+  color: var(--blue-bright);
+}
+
+.mh-table tbody td {
+  height: var(--row-h);
+  padding: 0 var(--sp-4);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+
+.mh-table tbody tr:hover td {
+  background: var(--surface-3);
+}
+
+.mh-table tbody tr[data-selected="true"] td {
+  background: var(--blue-wash);
+  box-shadow: inset 2px 0 0 var(--blue);
+}
+
+.mh-table tbody tr[data-clickable="true"] {
+  cursor: pointer;
+}
+
+.mh-table .num {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.mh-table__wrap {
+  height: 100%;
+  overflow: auto;
+}
+
+/* ---------- Badge ---------- */
+
+.mh-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 16px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.mh-badge[data-tone="ok"],
+.mh-badge[data-tone="safe"] {
+  color: var(--green);
+  border-color: rgba(23, 201, 100, 0.4);
+  background: var(--green-wash);
+}
+.mh-badge[data-tone="bad"],
+.mh-badge[data-tone="danger"] {
+  color: var(--red);
+  border-color: rgba(255, 77, 77, 0.45);
+  background: var(--red-wash);
+}
+.mh-badge[data-tone="warn"] {
+  color: var(--amber);
+  border-color: rgba(255, 176, 32, 0.42);
+  background: var(--amber-wash);
+}
+.mh-badge[data-tone="info"] {
+  color: var(--cyan);
+  border-color: rgba(0, 213, 224, 0.4);
+  background: var(--cyan-wash);
+}
+.mh-badge[data-tone="primary"] {
+  color: var(--blue-bright);
+  border-color: var(--line-accent);
+  background: var(--blue-wash);
+}
+.mh-badge[data-tone="sim"] {
+  color: var(--violet);
+  border-color: rgba(139, 92, 246, 0.45);
+  background: var(--violet-wash);
+}
+.mh-badge[data-tone="muted"] {
+  color: var(--text-mute);
+}
+
+/* ---------- Status dot ---------- */
+
+.mh-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--text-faint);
+}
+.mh-dot[data-tone="ok"] {
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(23, 201, 100, 0.7);
+}
+.mh-dot[data-tone="bad"] {
+  background: var(--red);
+  box-shadow: 0 0 6px rgba(255, 77, 77, 0.7);
+}
+.mh-dot[data-tone="warn"] {
+  background: var(--amber);
+  box-shadow: 0 0 6px rgba(255, 176, 32, 0.7);
+}
+.mh-dot[data-tone="info"] {
+  background: var(--cyan);
+  box-shadow: 0 0 6px rgba(0, 213, 224, 0.7);
+}
+.mh-dot[data-live="true"] {
+  animation: mh-pulse 2s ease-in-out infinite;
+}
+
+@keyframes mh-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mh-dot[data-live="true"] {
+    animation: none;
+  }
+}
+
+/* ---------- Buttons ---------- */
+
+.mh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  height: 24px;
+  padding: 0 var(--sp-5);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.mh-btn:hover:not(:disabled) {
+  background: var(--surface-4);
+  color: var(--text);
+}
+
+.mh-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mh-btn--primary {
+  color: var(--blue-bright);
+  border-color: var(--line-accent);
+  background: var(--blue-wash);
+}
+.mh-btn--primary:hover:not(:disabled) {
+  background: rgba(0, 132, 255, 0.2);
+  color: #fff;
+}
+
+.mh-btn--ok {
+  color: var(--green);
+  border-color: rgba(23, 201, 100, 0.42);
+  background: var(--green-wash);
+}
+.mh-btn--warn {
+  color: var(--amber);
+  border-color: rgba(255, 176, 32, 0.42);
+  background: var(--amber-wash);
+}
+.mh-btn--danger {
+  color: var(--red);
+  border-color: rgba(255, 77, 77, 0.45);
+  background: var(--red-wash);
+}
+.mh-btn--danger:hover:not(:disabled) {
+  background: rgba(255, 77, 77, 0.24);
+}
+
+.mh-btn--sm {
+  height: 18px;
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.06em;
+}
+
+.mh-btn--ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.mh-btn--ghost:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: var(--line);
+}
+
+/* ---------- Inputs ---------- */
+
+.mh-input,
+.mh-select {
+  height: 24px;
+  width: 100%;
+  padding: 0 var(--sp-4);
+  background: var(--surface-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.mh-input:focus,
+.mh-select:focus {
+  border-color: var(--blue);
+  outline: none;
+}
+
+.mh-input[aria-invalid="true"] {
+  border-color: var(--red);
+}
+
+.mh-input::placeholder {
+  color: var(--text-faint);
+}
+
+.mh-field {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.mh-field__hint {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-mute);
+}
+
+.mh-field__error {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--red);
+}
+
+/* ---------- Unavailable / empty / error states ---------- */
+
+.mh-na {
+  font-family: var(--font-mono);
+  font-size: inherit;
+  color: var(--text-faint);
+  cursor: help;
+  border-bottom: 1px dotted var(--text-faint);
+}
+
+.mh-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  min-height: 96px;
+  padding: var(--sp-7);
+  text-align: center;
+  color: var(--text-mute);
+}
+
+.mh-empty__title {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.mh-empty__detail {
+  font-size: var(--fs-xs);
+  max-width: 52ch;
+  line-height: 1.5;
+}
+
+.mh-empty__source {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+}
+
+.mh-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+.mh-banner[data-tone="bad"] {
+  border-color: rgba(255, 77, 77, 0.4);
+  background: var(--red-wash);
+  color: #ffd4d4;
+}
+.mh-banner[data-tone="warn"] {
+  border-color: rgba(255, 176, 32, 0.4);
+  background: var(--amber-wash);
+  color: #ffe3b0;
+}
+.mh-banner[data-tone="info"] {
+  border-color: var(--line-accent);
+  background: var(--blue-wash);
+  color: #cfe6ff;
+}
+
+/* ---------- Meter (limit vs current) ---------- */
+
+.mh-meter {
+  position: relative;
+  height: 4px;
+  background: var(--surface-3);
+  border-radius: 0;
+  overflow: hidden;
+}
+.mh-meter__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--green);
+}
+.mh-meter__fill[data-tone="warn"] {
+  background: var(--amber);
+}
+.mh-meter__fill[data-tone="bad"] {
+  background: var(--red);
+}
+.mh-meter__fill[data-tone="info"] {
+  background: var(--blue);
+}
+
+/* ---------- Fatal error screen (ErrorBoundary) ---------- */
+
+.fatal-error {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-5);
+  padding: var(--sp-8);
+  background: var(--surface-0);
+  color: var(--text);
+  font-family: var(--font-mono);
+  text-align: center;
+}
+
+.fatal-error h1 {
+  color: var(--red);
+  font-size: var(--fs-lg);
+  letter-spacing: var(--track-label);
+}
+
+.fatal-error pre {
+  max-width: 720px;
+  max-height: 40vh;
+  overflow: auto;
+  padding: var(--sp-5);
+  background: var(--surface-1);
+  border: 1px solid rgba(255, 77, 77, 0.35);
+  border-radius: var(--radius);
+  color: #ffb3b3;
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  text-align: left;
+}
+
+.fatal-error button {
+  height: 26px;
+  padding: 0 var(--sp-6);
+  border: 1px solid var(--line-accent);
+  border-radius: var(--radius);
+  background: var(--blue-wash);
+  color: var(--blue-bright);
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+}
+
+/* ---------- Dialog ---------- */
+
+.mh-dialog {
+  width: min(520px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  color: var(--text);
+}
+
+.mh-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.68);
+}
+
+.mh-dialog__head {
+  padding: var(--sp-4) var(--sp-5);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 800;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+.mh-dialog__body {
+  padding: var(--sp-6) var(--sp-5);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.mh-dialog__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+/* ---------- Definition list (key/value detail blocks) ---------- */
+
+.mh-dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--sp-3) var(--sp-6);
+  font-size: var(--fs-sm);
+}
+
+.mh-dl dt {
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  align-self: center;
+}
+
+.mh-dl dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Utility ---------- */
+
+.mh-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+.mh-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.mh-spacer {
+  flex: 1 1 auto;
+}
+.mh-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.mh-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mh-scroll {
+  overflow: auto;
+  min-height: 0;
+}

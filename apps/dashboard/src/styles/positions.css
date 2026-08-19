@@ -1,0 +1,28 @@
+.positions-page {
+  display: grid;
+  gap: 16px;
+}
+
+.positions-table {
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-strong);
+}
+
+.table-header,
+.table-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr 1fr;
+  gap: 8px;
+  padding: 10px 12px;
+  align-items: center;
+}
+
+.table-header {
+  background: rgba(148,163,184,0.02);
+  font-weight: 700;
+}
+
+.pnl.positive { color: var(--green); }
+.pnl.negative { color: var(--red); }

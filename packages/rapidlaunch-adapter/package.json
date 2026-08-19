@@ -1,0 +1,25 @@
+
+{
+  "name": "@mayhem/rapidlaunch-adapter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "RapidLaunch token launch subscription adapter.",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "clean": "tsc --build tsconfig.build.json --clean"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

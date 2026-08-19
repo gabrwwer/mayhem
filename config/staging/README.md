@@ -1,0 +1,1 @@
+Directory retained from previous mayhem-bot import; configuration examples live in `config/`.

@@ -1,0 +1,39 @@
+{
+  /*
+   * Composite project references.
+   *
+   * Restored now that packages/* exists again. Previously this referenced
+   * 13 projects that were not on disk, so `tsc --build` aborted immediately
+   * and took `pnpm build` and `pnpm typecheck` down with it.
+   *
+   * Differences from the original list:
+   *   - `packages/domain` removed: no package.json, no sources, and nothing
+   *     imports it. It was lockfile cruft.
+   *   - `packages/trading-engine` added: it was missing, despite being a
+   *     dependency of both apps.
+   *
+   * `analytics`, `notifications` and `shared` are intentionally absent —
+   * they ship no tsconfig.build.json, so they are not composite projects.
+   */
+  "compilerOptions": {
+    "forceConsistentCasingInFileNames": true,
+    "strict": true
+  },
+  "files": [],
+  "references": [
+    { "path": "packages/core-types/tsconfig.build.json" },
+    { "path": "packages/config/tsconfig.build.json" },
+    { "path": "packages/lp-intelligence/tsconfig.build.json" },
+    { "path": "packages/solana/tsconfig.build.json" },
+    { "path": "packages/token-monitor/tsconfig.build.json" },
+    { "path": "packages/ledger/tsconfig.build.json" },
+    { "path": "packages/risk-engine/tsconfig.build.json" },
+    { "path": "packages/database/tsconfig.build.json" },
+    { "path": "packages/trading-engine/tsconfig.build.json" },
+    { "path": "packages/rapidlaunch-adapter/tsconfig.build.json" },
+    { "path": "packages/execution/tsconfig.build.json" },
+    { "path": "packages/agent-sdk/tsconfig.build.json" },
+    { "path": "packages/market-data/tsconfig.build.json" },
+    { "path": "packages/accounting/tsconfig.build.json" }
+  ]
+}

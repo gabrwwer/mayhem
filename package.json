@@ -1,0 +1,91 @@
+{
+  "name": "mayhem",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Multi-agent orchestration system for Solana trading, with human-in-the-loop supervision.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.13 <23"
+  },
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json && pnpm --filter @mayhem/api build && pnpm --filter @mayhem/bot build && pnpm --filter optik-mayhem-terminal build",
+    "clean": "tsc --build tsconfig.build.json --clean",
+    "typecheck": "tsc --build tsconfig.build.json && tsc --noEmit -p tsconfig.json && pnpm --filter optik-mayhem-terminal typecheck",
+    "lint": "eslint .",
+    "lint:ci": "eslint . --max-warnings=0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "pretest": "tsc --build tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev:bot": "pnpm --filter @mayhem/bot dev",
+    "dev:api": "pnpm --filter @mayhem/api dev",
+    "dev:dashboard": "pnpm --filter optik-mayhem-terminal dev",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:coverage": "vitest run --coverage",
+    "secrets:generate": "node scripts/generate-api-secrets.mjs",
+    "secret-scan": "node scripts/secret-scan.mjs",
+    "audit:deps": "pnpm audit --audit-level=high",
+    "sbom": "node scripts/sbom.mjs",
+    "validate:manifests": "node scripts/validate-manifests.mjs",
+    "prepare": "husky || true"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@mayhem/accounting": "workspace:*",
+    "@mayhem/agent-sdk": "workspace:*",
+    "@mayhem/analytics": "workspace:*",
+    "@mayhem/config": "workspace:*",
+    "@mayhem/core-types": "workspace:*",
+    "@mayhem/database": "workspace:*",
+    "@mayhem/execution": "workspace:*",
+    "@mayhem/ledger": "workspace:*",
+    "@mayhem/lp-intelligence": "workspace:*",
+    "@mayhem/market-data": "workspace:*",
+    "@mayhem/notifications": "workspace:*",
+    "@mayhem/rapidlaunch-adapter": "workspace:*",
+    "@mayhem/risk-engine": "workspace:*",
+    "@mayhem/shared": "workspace:*",
+    "@mayhem/solana": "workspace:*",
+    "@mayhem/token-monitor": "workspace:*",
+    "@mayhem/trading-engine": "workspace:*",
+    "@solana/spl-token": "^0.4.0",
+    "@solana/web3.js": "^1.95.0",
+    "@types/express": "^4.17.21",
+    "@types/node": "20.19.43",
+    "@vitest/coverage-v8": "4.1.10",
+    "eslint": "10.8.0",
+    "express": "^4.19.0",
+    "husky": "9.1.7",
+    "lint-staged": "16.2.0",
+    "prettier": "3.9.6",
+    "ts-node": "^10.9.2",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.66.0",
+    "vitest": "4.1.10",
+    "yaml": "2.9.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "bufferutil",
+      "utf-8-validate",
+      "bigint-buffer"
+    ]
+  },
+  "lint-staged": {
+    "*.{ts,mts,cts,js,mjs,cjs}": [
+      "eslint --fix --max-warnings=0",
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
+  }
+}

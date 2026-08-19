@@ -1,0 +1,65 @@
+.config-header .subtitle {
+  color: var(--text-mute);
+  margin-top: 8px;
+}
+
+.config-sections {
+  display: grid;
+  gap: 18px;
+}
+
+.config-section {
+  display: grid;
+  gap: 16px;
+}
+
+.config-group {
+  display: grid;
+  gap: 10px;
+}
+
+.config-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: not-allowed;
+}
+
+.toggle-label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.tooltip {
+  color: var(--text-mute);
+  font-size: 0.82rem;
+}
+
+.config-hint,
+.config-list {
+  color: var(--text-mute);
+  font-size: 0.92rem;
+}
+
+.config-list {
+  padding-left: 18px;
+}
+
+.config-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.config-actions .btn {
+  min-width: 160px;
+}
+
+.save-banner {
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  color: #bbf7d0;
+  padding: 12px 14px;
+  border-radius: 14px;
+}

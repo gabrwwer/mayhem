@@ -1,0 +1,11 @@
+
+node_modules
+/dist
+.env
+.env.*
+.DS_Store
+*.log
+*.pem
+*.key
+*.wallet
+*.enc

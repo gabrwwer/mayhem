@@ -1,0 +1,1 @@
+export const authRoute = { path: "/api/auth" };

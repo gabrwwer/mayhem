@@ -1,0 +1,32 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "incremental": true,
+    "noEmit": false,
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
+
+    "paths": {
+      "@mayhem/config": ["../../packages/config/dist"],
+      "@mayhem/database": ["../../packages/database/dist"],
+      "@mayhem/solana": ["../../packages/solana/dist"],
+      "@mayhem/trading-engine": ["../../packages/domain/dist"],
+      "@mayhem/risk-engine": ["../../packages/risk-engine/dist"],
+      "@mayhem/token-monitor": ["../../packages/token-monitor/dist"],
+      "@mayhem/rapidlaunch-adapter": ["../../packages/rapidlaunch-adapter/dist"],
+      "@mayhem/execution": ["../../packages/execution/dist"]
+    }
+  },
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

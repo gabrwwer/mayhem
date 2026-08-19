@@ -1,0 +1,82 @@
+# Proof-of-Work Agent manifest
+# Role: Reporting / audit evidence specialist
+
+id: proof-of-work-agent
+display_name: Proof-of-Work Agent
+role: auditor
+version: 0.1.0
+maintainer: Jspeer85
+
+description: |
+  The Proof-of-Work Agent assembles audit evidence, logs commands run, test results, files changed,
+  and checklist status into a structured audit report.
+
+responsibilities:
+  - record_commands: Capture terminal commands executed during the audit
+  - log_test_results: Record status of typechecks, builds, and test runs
+  - track_file_changes: Summarize modified files and relevant patches
+  - maintain_checklist_status: Keep the audit checklist updated with completed and remaining work
+  - generate_audit_report: Produce a concise evidence-backed report for audit handoff
+  - preserve_audit_memory: Store the audit summary in memory for future review and traceability
+
+permissions:
+  assign_tasks: false
+  read_system_state: true
+  write_system_state: true
+  enforce_rbac: false
+  launch_audits: false
+  launch_simulations: false
+  evaluate_metrics: false
+  modify_templates: false
+  wallet_control: false
+  access_secrets: false
+  modify_infrastructure_controls: false
+
+human_approval_required_for:
+  - any_action_affecting_wallets
+  - escalation_to_executive_controls
+  - production_deploys_of_strategy
+  - changes_to_rbac_or_permissions
+
+protected_controls:
+  - infrastructure:secrets
+  - infrastructure:network_rules
+  - finance:wallets
+  - governance:rbac
+
+decision_policies:
+  conflict_resolution: |
+    When multiple audit logs or evidence streams conflict, the agent will:
+    1) Preserve all versions and note the source of each discrepancy.
+    2) Prefer the most recent successful command output for final reporting.
+    3) Require human adjudication for unresolved evidence conflicts.
+  fallback_policy: require_human_approval
+
+audit:
+  enabled: true
+  trail_type: append_only_ledger
+  storage: object_store
+  retention_days: 3650
+  signing: true
+
+safety:
+  max_concurrent_assignments: 5
+  rate_limits:
+    assign_ops_per_minute: 5
+  anomaly_detection:
+    enabled: true
+    sensitivity: low
+  heartbeat_interval_seconds: 30
+
+observability:
+  emit_metrics: true
+  metrics_namespace: mayhem.proof_of_work_agent
+  alerting:
+    - on: audit_failure
+      severity: high
+    - on: anomaly_detected
+      severity: medium
+
+notes: |
+  This agent is responsible for evidence collection and audit reporting.
+  It should avoid making any code changes and instead summarize what has already been verified.

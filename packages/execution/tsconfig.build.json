@@ -1,0 +1,16 @@
+
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    { "path": "../core-types/tsconfig.build.json" },
+    { "path": "../risk-engine/tsconfig.build.json" },
+    { "path": "../solana/tsconfig.build.json" },
+    { "path": "../token-monitor/tsconfig.build.json" }
+  ]
+}

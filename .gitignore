@@ -1,0 +1,27 @@
+node_modules/
+dist/
+coverage/
+# Paper-trade journal: run output, not source.
+data/
+*.tsbuildinfo
+sbom.json
+
+# Never commit real configuration or credentials.
+.env
+.env.*
+!.env.example
+config/local.*
+config.json
+*.pem
+*.key
+id_*.json
+keypair*.json
+wallet*.json
+
+.DS_Store
+*.enc
+wallet.enc
+*.wallet
+*.log
+.next/
+.turbo

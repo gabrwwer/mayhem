@@ -1,0 +1,1 @@
+export const launchesRoute = { path: "/api/launches" };

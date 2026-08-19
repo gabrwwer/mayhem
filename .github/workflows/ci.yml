@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# A workflow that cannot install dependencies is not a gate. The previous
+# version used `cache: 'pnpm'` and ran `pnpm install` without ever
+# installing pnpm, so every run failed at the install step — meaning none of
+# the lint, test or audit steps below had been enforcing anything.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Use Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Build workspace
+        run: pnpm run build
+
+      - name: Lint
+        run: pnpm run lint:ci
+
+      - name: Format check
+        run: pnpm run format:check
+
+      - name: Validate agent manifests
+        run: pnpm run validate:manifests
+
+      # The secret-scan script existed but was never wired into CI, so a
+      # committed credential would have reached main unchallenged.
+      - name: Secret scan
+        run: pnpm run secret-scan
+
+      - name: Test coverage
+        run: pnpm run test:coverage
+
+      - name: Dependency audit
+        run: pnpm run audit:deps
