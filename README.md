@@ -1,4 +1,3 @@
-
 # Mayhem
 
 Multi-agent orchestration system for Solana trading, built around a supervisor that
