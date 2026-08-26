@@ -1,1 +1,0 @@
-Directory retained from previous mayhem-bot import; see `docs/security` for current guidance.

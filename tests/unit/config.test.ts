@@ -21,6 +21,8 @@ test("rejects finalized commitment", () => {
 
 test("accepts legacy size and breaker aliases from the boot env", () => {
   process.env['RPC_COMMITMENT'] = "confirmed";
+  process.env['TRADING_ENABLED'] = "false";
+  process.env['DRY_RUN'] = "true";
   process.env['SNIPE_POSITION_SOL'] = "0.5";
   process.env['MAX_POSITION_SOL'] = "0.25";
   process.env['MAX_CONCURRENT_POSITIONS'] = "4";

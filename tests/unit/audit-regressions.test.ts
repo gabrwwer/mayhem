@@ -20,6 +20,7 @@ import {
   deserializePosition,
   type TradingConfig,
 } from '@mayhem/trading-engine';
+import { parseAmount } from '../../packages/trading-engine/src/calculations';
 
 /**
  * Regression suite for the findings in docs/audits/MAYHEM_AUDIT.md.
@@ -69,7 +70,7 @@ describe('F2: entry requires a confirmed fill', () => {
     it(`does not open a position when the venue reports "${status}"`, async () => {
       const pm = new PositionManager(tradingConfig());
       const execution = {
-        quoteBuy: vi.fn().mockResolvedValue({ pricePerToken: 2, outputAmount: 5 }),
+        quoteBuy: vi.fn().mockResolvedValue({ pricePerToken: '2', outputAmount: '5' }),
         buildBuyTransaction: vi.fn().mockResolvedValue({}),
         signAndSendTransaction: vi
           .fn()
@@ -82,8 +83,8 @@ describe('F2: entry requires a confirmed fill', () => {
         tokenMint: 'MintA',
         action: 'buy',
         reason: 'test',
-        price: 2,
-        amount: 1,
+        price: '2',
+        amount: '1',
         timestamp: new Date(),
       });
 
@@ -96,15 +97,15 @@ describe('F2: entry requires a confirmed fill', () => {
     const pm = new PositionManager(tradingConfig());
     const execution = {
       // Quote says 5 tokens at 2.0 — the fill says otherwise.
-      quoteBuy: vi.fn().mockResolvedValue({ pricePerToken: 2, outputAmount: 5 }),
+      quoteBuy: vi.fn().mockResolvedValue({ pricePerToken: '2', outputAmount: '5' }),
       buildBuyTransaction: vi.fn().mockResolvedValue({}),
       signAndSendTransaction: vi.fn().mockResolvedValue({
         signature: 'sig',
         status: 'confirmed',
         error: null,
-        fees: 0.001,
-        filledInputAmount: 1,
-        filledOutputAmount: 4,
+        fees: '0.001',
+        filledInputAmount: '1',
+        filledOutputAmount: '4',
       }),
     };
 
@@ -113,14 +114,14 @@ describe('F2: entry requires a confirmed fill', () => {
       tokenMint: 'MintA',
       action: 'buy',
       reason: 'test',
-      price: 2,
-      amount: 1,
+      price: '2',
+      amount: '1',
       timestamp: new Date(),
     });
 
     expect(position).not.toBeNull();
-    expect(position!.quantity).toBe(4);
-    expect(position!.actualEntryPrice).toBeCloseTo(0.25, 10);
+    expect(position!.quantity).toBe('4');
+    expect(parseAmount(position!.actualEntryPrice).equals('0.25')).toBe(true);
   });
 
   it('refuses to open when the execution engine exposes no buy path', async () => {
@@ -370,8 +371,8 @@ describe('F15: entry risk threshold comes from config', () => {
     const cfg = tradingConfig({ minRiskScore: 80 });
     const engine = new MayhemEngine(cfg, new PositionManager(cfg), {}, {}, silentLogger());
 
-    expect(engine.evaluateToken('MintA', 1, 100, 50)).toBeNull();
-    expect(engine.evaluateToken('MintA', 1, 100, 80)).not.toBeNull();
+    expect(engine.evaluateToken('MintA', '1', '100', 50)).toBeNull();
+    expect(engine.evaluateToken('MintA', '1', '100', 80)).not.toBeNull();
   });
 
   it('applies the configured liquidity participation cap', () => {
@@ -381,8 +382,8 @@ describe('F15: entry risk threshold comes from config', () => {
     });
     const engine = new MayhemEngine(cfg, new PositionManager(cfg), {}, {}, silentLogger());
 
-    const signal = engine.evaluateToken('MintA', 1, 1_000, 90);
-    expect(signal!.amount).toBeCloseTo(10, 9); // 1% of 1000
+    const signal = engine.evaluateToken('MintA', '1', '1000', 90);
+    expect(parseAmount(signal!.amount).equals('10')).toBe(true); // 1% of 1000
   });
 });
 
@@ -391,11 +392,11 @@ describe('F15: entry risk threshold comes from config', () => {
 // ───────────────────────────────────────────────────────────────────────
 
 describe('C1: entry fails closed when liquidity is unknown', () => {
-  const unknownLiquidity: Array<[string, number]> = [
-    ['zero', 0],
-    ['negative', -1],
-    ['NaN', Number.NaN],
-    ['Infinity', Number.POSITIVE_INFINITY],
+  const unknownLiquidity: Array<[string, string]> = [
+    ['zero', '0'],
+    ['negative', '-1'],
+    ['NaN', 'NaN'],
+    ['Infinity', 'Infinity'],
   ];
 
   for (const [label, liquidity] of unknownLiquidity) {
@@ -406,7 +407,7 @@ describe('C1: entry fails closed when liquidity is unknown', () => {
       });
       const engine = new MayhemEngine(cfg, new PositionManager(cfg), {}, {}, silentLogger());
 
-      expect(engine.evaluateToken('MintA', 1, liquidity, 90)).toBeNull();
+      expect(engine.evaluateToken('MintA', '1', liquidity, 90)).toBeNull();
     });
   }
 
@@ -417,9 +418,9 @@ describe('C1: entry fails closed when liquidity is unknown', () => {
     });
     const engine = new MayhemEngine(cfg, new PositionManager(cfg), {}, {}, silentLogger());
 
-    const signal = engine.evaluateToken('MintA', 1, 5_000, 90);
+    const signal = engine.evaluateToken('MintA', '1', '5000', 90);
     expect(signal).not.toBeNull();
-    expect(signal!.amount).toBeCloseTo(50, 9); // 1% of 5000
+    expect(parseAmount(signal!.amount).equals('50')).toBe(true); // 1% of 5000
   });
 
   it('never returns a size exceeding the participation cap', () => {
@@ -430,9 +431,9 @@ describe('C1: entry fails closed when liquidity is unknown', () => {
     const engine = new MayhemEngine(cfg, new PositionManager(cfg), {}, {}, silentLogger());
 
     // Thin pool: the cap, not maxPositionSol, must bind.
-    const signal = engine.evaluateToken('MintA', 1, 200, 90);
-    expect(signal!.amount).toBeCloseTo(2, 9);
-    expect(signal!.amount).toBeLessThan(cfg.maxPositionSol);
+    const signal = engine.evaluateToken('MintA', '1', '200', 90);
+    expect(parseAmount(signal!.amount).equals('2')).toBe(true);
+    expect(parseAmount(signal!.amount).lessThan(String(cfg.maxPositionSol))).toBe(true);
   });
 });
 

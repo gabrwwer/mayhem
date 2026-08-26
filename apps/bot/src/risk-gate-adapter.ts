@@ -13,7 +13,7 @@ import { logger } from './logger';
  * The previous implementation returned `{ score: 90, canTrade: true }` for
  * every pump.fun token *before* any check ran, and for everything else
  * checked liquidity and nothing more. Because the launch handler requires
- * `score >= MIN_RISK_SCORE` (default 80) and this always returned 90, the
+ * `score >= MIN_RISK_SCORE` (default 70) and this always returned 90, the
  * risk rejection path was unreachable: no honeypot check, no mint- or
  * freeze-authority check, no holder-concentration check ever executed, and
  * `TokenSafetyScanner` — which implements all of them — was dead code.
@@ -436,3 +436,4 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+

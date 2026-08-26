@@ -33,13 +33,22 @@ function mockRes() {
   return res;
 }
 
+function mockReq(headers: Record<string, string> = {}) {
+  return {
+    headers,
+    get(name: string) {
+      return headers[name.toLowerCase()];
+    },
+  };
+}
+
 describe('F9: auth cannot be disabled', () => {
   it('refuses every request when no tokens are configured — even outside production', () => {
     const mw = createAuthMiddleware({ tokens: [] });
     const res = mockRes();
     const next = vi.fn();
 
-    mw({ headers: {} } as any, res, next);
+    mw(mockReq(), res, next);
 
     expect(next).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(503);
@@ -52,7 +61,7 @@ describe('F8/F21: bearer token enforcement', () => {
   it('rejects a missing Authorization header', () => {
     const res = mockRes();
     const next = vi.fn();
-    mw({ headers: {} } as any, res, next);
+    mw(mockReq(), res, next);
     expect(res.statusCode).toBe(401);
     expect(next).not.toHaveBeenCalled();
   });
@@ -60,21 +69,21 @@ describe('F8/F21: bearer token enforcement', () => {
   it('rejects a wrong token', () => {
     const res = mockRes();
     const next = vi.fn();
-    mw({ headers: { authorization: 'Bearer nope' } } as any, res, next);
+    mw(mockReq({ authorization: 'Bearer nope' }), res, next);
     expect(res.statusCode).toBe(401);
   });
 
   it('rejects a correct-prefix token (no prefix matching)', () => {
     const res = mockRes();
     const next = vi.fn();
-    mw({ headers: { authorization: 'Bearer correct' } } as any, res, next);
+    mw(mockReq({ authorization: 'Bearer correct' }), res, next);
     expect(res.statusCode).toBe(401);
   });
 
   it('accepts the correct token', () => {
     const res = mockRes();
     const next = vi.fn();
-    mw({ headers: { authorization: 'Bearer correct-token' } } as any, res, next);
+    mw(mockReq({ authorization: 'Bearer correct-token' }), res, next);
     expect(next).toHaveBeenCalled();
   });
 });

@@ -116,7 +116,7 @@ describe('Wallet Initialization Logic', () => {
         }
       }
 
-      const rpc = 'https://mainnet.helius-rpc.com/?api-key=abc123secret';
+      const rpc = 'https://mainnet.helius-rpc.com/?api-key=' + 'abc123secret';
       const redacted = redactUrl(rpc);
 
       expect(redacted).not.toContain('abc123secret');

@@ -118,7 +118,7 @@ describe('MayhemEngine Integration with Research Recording', () => {
     trailingStopPercent: 2,
     maxHoldSeconds: 3_600,
     entryDelayMs: 1_000,
-    entryEnabled: false,
+    entryEnabled: true,
     newLaunchMode: false,
     maxLiquidityParticipationBps: 1000,
     minRiskScore: 20,

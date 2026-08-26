@@ -43,7 +43,7 @@ describe('transition table', () => {
   it('does not allow a detected pool to become tradeable', () => {
     // The safety property this whole module exists for.
     expect(canTransition('LP_DETECTED', 'TRADEABLE')).toBe(false);
-    expect(allowedTransitions('LP_DETECTED')).not.toContain('TRADEABLE');
+    expect(allowedTransitions('LP_DETECTED').includes('TRADEABLE')).toBe(false);
   });
 
   it('does not allow an initialized pool to skip validation', () => {

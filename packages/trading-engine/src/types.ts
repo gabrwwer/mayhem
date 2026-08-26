@@ -31,7 +31,7 @@ export interface TradingConfig {
   /**
    * Minimum risk score required to open a position. Previously the engine
    * hardcoded `riskScore < 30` while the launch handler enforced
-   * MIN_RISK_SCORE=80 — two different limits for the same decision, so the
+   * MIN_RISK_SCORE=70 — two different limits for the same decision, so the
    * dashboard showed one number and the engine applied another.
    */
   minRiskScore: number;
@@ -55,6 +55,10 @@ export interface TradingConfig {
    * 250 ms monitor loop re-quotes on every tick forever.
    */
   takeProfitRetryDelayMs: number;
+  /** Expected exit costs used only to establish a break-even protection floor. */
+  expectedExitCostPercent?: number;
+  /** Enables the existing confirmed momentum/volume reversal exit. */
+  aggressiveExitOnMomentumReversal?: boolean;
 }
 
 export interface Position {
@@ -62,22 +66,22 @@ export interface Position {
   tokenMint: string;
 
   /** Discovery / observed spot price before any trade decision is made. */
-  observationPrice: number;
+  observationPrice: DecimalValue;
   /** Signal / quote price used to evaluate whether the setup qualifies. */
-  signalPrice: number;
+  signalPrice: DecimalValue;
   /** Qualified entry price used for position bookkeeping and P&L baselines. */
-  qualifiedEntryPrice: number;
+  qualifiedEntryPrice: DecimalValue;
   /** Backward-compatible alias for the qualified entry price. */
-  entryPrice: number;
+  entryPrice: DecimalValue;
   /** Actual executed fill price that the chain settled on. */
-  actualEntryPrice: number;
+  actualEntryPrice: DecimalValue;
   /** Explicit alias for the actual executed fill price. */
-  executionPrice: number;
+  executionPrice: DecimalValue;
 
   entryTime: Date;
-  quantity: number;
+  quantity: DecimalValue;
   /** Cost basis of the CURRENTLY held quantity. Shrinks on a partial exit. */
-  entryNotional: number;
+  entryNotional: DecimalValue;
   /**
    * Cost basis at open, never modified.
    *
@@ -86,32 +90,32 @@ export interface Position {
    * P&L keeps accumulating, so a second partial fill reports a wildly
    * inflated return percentage.
    */
-  originalEntryNotional: number;
-  entryFees: number;
+  originalEntryNotional: DecimalValue;
+  entryFees: DecimalValue;
   entryTx: string | null;
-  currentPrice: number;
-  unrealizedPnl: number;
-  realizedPnl: number;
-  grossPnl: number;
-  netPnl: number;
-  netPnlPercent: number;
-  stopLoss: number;
-  takeProfit: number;
-  trailingStop: number;
-  trailingStopHighPrice: number;
+  currentPrice: DecimalValue;
+  unrealizedPnl: DecimalValue;
+  realizedPnl: DecimalValue;
+  grossPnl: DecimalValue;
+  netPnl: DecimalValue;
+  netPnlPercent: DecimalValue;
+  stopLoss: DecimalValue;
+  takeProfit: DecimalValue;
+  trailingStop: DecimalValue;
+  trailingStopHighPrice: DecimalValue;
   profitLockActive: boolean;
   highestLockPercent: number;
   aggressiveTrailingActive: boolean;
   exitReason: string | null;
   exitTx: string | null;
-  fees: number;
+  fees: DecimalValue;
   slippage: number;
   status: 'open' | 'closed' | 'exiting';
   exitAttemptCount: number;
   lastExitAttemptAt: Date | null;
   lastExitError: string | null;
-  lastExitQuotePrice: number | null;
-  entryLiquidity: number;
+  lastExitQuotePrice: DecimalValue | null;
+  entryLiquidity: DecimalValue;
 
   /**
    * When `currentPrice` was last successfully refreshed.
@@ -136,12 +140,16 @@ export interface Position {
    * self-inflicted rate-limit.
    */
   staleExitDeferredUntil: number | null;
+  /** Highest protected exit price established by profit management. */
+  protectedFloorPrice?: DecimalValue;
+  /** Explicit profit-management state for lifecycle and audit output. */
+  profitManagementState?: 'INITIAL_DEVELOPMENT' | 'PROFIT_PROTECTION' | 'TRAILING';
   // Price history for MFE/MAE and return snapshots. Kept as [ts, price].
-  priceHistory?: Array<{ ts: number; price: number }>;
-  peakPrice?: number;
-  troughPrice?: number;
-  mfePct?: number;
-  maePct?: number;
+  priceHistory?: Array<{ ts: number; price: DecimalValue }>;
+  peakPrice?: DecimalValue;
+  troughPrice?: DecimalValue;
+  mfePct?: DecimalValue;
+  maePct?: DecimalValue;
   // Return snapshots (percent) at configured intervals, null if unavailable.
   returns?: Record<string, number | null>;
   holdDurationMs?: number;
@@ -172,42 +180,45 @@ export interface TradeSignal {
   tokenMint: string;
   action: 'buy' | 'sell';
   reason: string;
-  price: number;
-  amount: number;
+  price: DecimalValue;
+  amount: DecimalValue;
   timestamp: Date;
-  entryLiquidity?: number;
+  entryLiquidity?: DecimalValue;
 }
 
 export interface ExitCondition {
   type: 'take_profit' | 'stop_loss' | 'trailing_stop' | 'time_exit' | 'liquidity_exit' | 'volatility_exit' | 'emergency';
   triggered: boolean;
-  value: number;
+  value: DecimalValue;
 }
 
 export interface PositionUpdate {
   positionId: string;
-  currentPrice: number;
-  unrealizedPnl: number;
+  currentPrice: DecimalValue;
+  unrealizedPnl: DecimalValue;
   exitConditions: ExitCondition[];
 }
 
 export interface SellQuote {
-  outputAmount: number;
-  pricePerToken: number;
-  priceImpactPct: number;
+  outputAmount: DecimalValue;
+  outputRawAmount?: bigint;
+  pricePerToken: DecimalValue;
+  priceImpactPct: DecimalValue;
   route: string;
   timestamp: number;
+  estimatedFeeSol?: DecimalValue;
 }
 
 export interface NetPnlResult {
-  grossProceeds: number;
-  estimatedSellFees: number;
-  estimatedPriceImpact: number;
-  netProceeds: number;
-  entryCost: number;
-  netPnl: number;
-  netPnlPercent: number;
+  grossProceeds: DecimalValue;
+  estimatedSellFees: DecimalValue;
+  estimatedPriceImpact: DecimalValue;
+  netProceeds: DecimalValue;
+  entryCost: DecimalValue;
+  netPnl: DecimalValue;
+  netPnlPercent: DecimalValue;
   quoteAgeMs: number;
   isStale: boolean;
   excessivePriceImpact: boolean;
 }
+import type { DecimalValue } from './calculations';

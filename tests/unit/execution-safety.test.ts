@@ -130,6 +130,91 @@ describe('F3: waitForLanding tolerates transient poll failures', () => {
   });
 });
 
+describe('Jito configuration wiring', () => {
+  it('uses the configured landing poll interval by default', async () => {
+    vi.useFakeTimers();
+    const client = new JitoClient('https://example.invalid', { pollMs: 17 });
+    const status = vi
+      .spyOn(client, 'bundleStatus')
+      .mockResolvedValueOnce('Pending')
+      .mockResolvedValueOnce('Landed');
+    vi.spyOn(client, 'bundleDetails').mockResolvedValue({
+      bundle_id: 'b',
+      status: 'Landed',
+      transactions: ['sig'],
+    });
+
+    const resultPromise = client.waitForLanding('b', 100);
+    await vi.advanceTimersByTimeAsync(16);
+    expect(status).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(resultPromise).resolves.toMatchObject({ status: 'Landed' });
+    expect(status).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it('honors the configured tip-account TTL', async () => {
+    vi.useFakeTimers();
+    const client = new JitoClient('https://example.invalid', {
+      tipAccountsTtlMs: 25,
+    });
+    const rpc = vi
+      .spyOn(
+        client as unknown as { rpc: (method: string, params: unknown[]) => Promise<unknown> },
+        'rpc',
+      )
+      .mockResolvedValue(['11111111111111111111111111111111']);
+
+    await client.tipAccounts();
+    await client.tipAccounts();
+    expect(rpc).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(24);
+    await client.tipAccounts();
+    expect(rpc).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await client.tipAccounts();
+    expect(rpc).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it('preserves the existing 300ms landing-poll and 60s tip-account defaults', async () => {
+    vi.useFakeTimers();
+    const client = new JitoClient('https://example.invalid');
+    const status = vi
+      .spyOn(client, 'bundleStatus')
+      .mockResolvedValueOnce('Pending')
+      .mockResolvedValueOnce('Landed');
+    vi.spyOn(client, 'bundleDetails').mockResolvedValue({
+      bundle_id: 'b',
+      status: 'Landed',
+      transactions: ['sig'],
+    });
+
+    const resultPromise = client.waitForLanding('b', 1_000);
+    await vi.advanceTimersByTimeAsync(299);
+    expect(status).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(resultPromise).resolves.toMatchObject({ status: 'Landed' });
+
+    const rpc = vi
+      .spyOn(
+        client as unknown as { rpc: (method: string, params: unknown[]) => Promise<unknown> },
+        'rpc',
+      )
+      .mockResolvedValue(['11111111111111111111111111111111']);
+    await client.tipAccounts();
+    await vi.advanceTimersByTimeAsync(59_999);
+    await client.tipAccounts();
+    expect(rpc).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await client.tipAccounts();
+    expect(rpc).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+});
+
 describe('F5: SPL Token program ids are correct', () => {
   it('uses the canonical SPL Token program id', () => {
     expect(TOKEN_PROGRAM.toBase58()).toBe(

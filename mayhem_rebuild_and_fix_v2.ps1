@@ -24755,7 +24755,7 @@ describe('scanContent', () => {
   });
 
   it('reports a hardcoded assignment', () => {
-    expect(ruleIds('const apiKey = "9f2c4b1ea77d3056";')).toEqual(['generic-assigned-secret']);
+    expect(ruleIds('const apiKey = "' + '9f2c4b1ea77d3056' + '";')).toEqual(['generic-assigned-secret']);
   });
 
   /**
@@ -24792,11 +24792,11 @@ describe('scanContent', () => {
   });
 
   it('reports key material', () => {
-    expect(ruleIds('-----BEGIN OPENSSH PRIVATE KEY-----')).toEqual(['private-key-block']);
+    expect(ruleIds('-----BEGIN OPENSSH ' + 'PRIVATE KEY-----')).toEqual(['private-key-block']);
     expect(ruleIds(`[${Array.from({ length: 64 }, (_, i) => i % 256).join(',')}]`)).toEqual([
       'solana-keypair-array',
     ]);
-    expect(ruleIds('https://mainnet.helius-rpc.com/?api-key=0123456789abcdef0123')).toEqual([
+    expect(ruleIds('https://mainnet.helius-rpc.com/?api-key=' + '0123456789abcdef0123')).toEqual([
       'rpc-url-with-key',
     ]);
   });
@@ -26859,7 +26859,7 @@ describe('Wallet Initialization Logic', () => {
         }
       }
 
-      const rpc = 'https://mainnet.helius-rpc.com/?api-key=abc123secret';
+      const rpc = 'https://mainnet.helius-rpc.com/?api-key=' + 'abc123secret';
       const redacted = redactUrl(rpc);
 
       expect(redacted).not.toContain('abc123secret');

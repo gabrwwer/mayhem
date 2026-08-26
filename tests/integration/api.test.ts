@@ -1,5 +1,6 @@
 
 import express from 'express';
+import { Readable, Writable } from 'node:stream';
 import { createRoutes } from '../../apps/api/src/routes';
 import { BotState } from '../../apps/api/src/state';
 
@@ -22,20 +23,62 @@ function createTestApp(state: BotState) {
 }
 
 async function request(app: any, method: string, path: string) {
-  const http = await import('http');
-  return new Promise<{ status: number; body: any }>((resolve) => {
-    const server = app.listen(0, () => {
-      const port = (server.address() as any).port;
-      const req = http.request({ hostname: 'localhost', port, path, method }, (res) => {
-        let data = '';
-        res.on('data', (chunk: Buffer) => { data += chunk; });
-        res.on('end', () => {
-          server.close();
-          resolve({ status: res.statusCode || 0, body: JSON.parse(data || '{}') });
-        });
-      });
-      req.end();
+  return new Promise<{ status: number; body: any }>((resolve, reject) => {
+    const req = new Readable({
+      read() {
+        this.push(null);
+      },
+    }) as any;
+    req.method = method;
+    req.url = path;
+    req.headers = {};
+    req.connection = { remoteAddress: '127.0.0.1' };
+    req.socket = req.connection;
+
+    const chunks: Buffer[] = [];
+    const headers = new Map<string, string | number | readonly string[]>();
+    const res = new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        callback();
+      },
+    }) as any;
+
+    res.statusCode = 200;
+    res.setHeader = (name: string, value: string | number | readonly string[]) => {
+      headers.set(name.toLowerCase(), value);
+      return res;
+    };
+    res.getHeader = (name: string) => headers.get(name.toLowerCase());
+    res.removeHeader = (name: string) => {
+      headers.delete(name.toLowerCase());
+    };
+    res.writeHead = (statusCode: number, responseHeaders?: Record<string, string | number | readonly string[]>) => {
+      res.statusCode = statusCode;
+      for (const [name, value] of Object.entries(responseHeaders ?? {})) {
+        res.setHeader(name, value);
+      }
+      return res;
+    };
+    res.write = (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      return true;
+    };
+    res.end = (chunk?: Buffer | string) => {
+      if (chunk !== undefined) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      res.emit('finish');
+      return res;
+    };
+
+    res.on('finish', () => {
+      const data = Buffer.concat(chunks).toString('utf8');
+      resolve({ status: res.statusCode || 0, body: JSON.parse(data || '{}') });
     });
+    res.on('error', reject);
+
+    app.handle(req, res, reject);
   });
 }
 

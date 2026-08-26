@@ -34,8 +34,8 @@ export function resolveBotEnvPath(): string {
     const pkgPath = path.join(dir, 'package.json');
     if (fs.existsSync(pkgPath)) {
       try {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-        if (pkg.workspaces) {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as Record<string, unknown>;
+        if (Array.isArray(pkg['workspaces'])) {
           const candidate = path.join(dir, 'apps', 'bot', '.env');
           if (fs.existsSync(candidate)) {
             cachedBotEnvPath = candidate;
@@ -79,7 +79,7 @@ export function writeBotEnvUpdates(
 ): { written: string[]; missing: string[] } {
   const filePath = resolveBotEnvPath();
   if (!fs.existsSync(filePath)) {
-    throw new Error(`Bot .env file not found at ${filePath}`);
+    throw new Error(`Bot .env file not found at ${String(filePath)}`);
   }
 
   const original = fs.readFileSync(filePath, 'utf8');

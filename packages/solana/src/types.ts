@@ -34,7 +34,10 @@ export interface TransactionResult {
   status: TransactionStatus;
   slot: number;
   error: string | null;
-  fees: number;
+  /** Human-readable SOL fee as an exact decimal string. */
+  fees: string;
+  /** Raw fee paid by the transaction, in lamports. */
+  feesLamports?: bigint;
 
   /**
    * Actual executed amounts, as observed from the confirmed transaction.
@@ -45,8 +48,14 @@ export interface TransactionResult {
    * some venues cannot report them; a caller that receives `undefined`
    * must log the degradation rather than silently substitute the quote.
    */
-  filledInputAmount?: number;
-  filledOutputAmount?: number;
+  /** Human-readable executed input amount as an exact decimal string. */
+  filledInputAmount?: string;
+  /** Human-readable executed output amount as an exact decimal string. */
+  filledOutputAmount?: string;
+  /** Raw executed input amount in base units, when the venue can report it. */
+  filledInputRawAmount?: bigint;
+  /** Raw executed output amount in base units, when the venue can report it. */
+  filledOutputRawAmount?: bigint;
 }
 
 /** True only for a transaction that is known to have executed on-chain. */
@@ -59,10 +68,18 @@ export function isFilled(
 export interface QuoteResult {
   inputMint: string;
   outputMint: string;
-  inputAmount: number;
-  outputAmount: number;
-  pricePerToken: number;
-  priceImpactPct: number;
+  /** Human-readable input amount as an exact decimal string. */
+  inputAmount: string;
+  /** Human-readable output amount as an exact decimal string. */
+  outputAmount: string;
+  /** Raw input amount in base units. */
+  inputRawAmount?: bigint;
+  /** Raw output amount in base units. */
+  outputRawAmount?: bigint;
+  /** Human-readable price as an exact decimal string. */
+  pricePerToken: string;
+  /** Human-readable percentage as an exact decimal string. */
+  priceImpactPct: string;
   slippageBps: number;
   route: string;
 }

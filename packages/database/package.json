@@ -14,16 +14,22 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": ["dist", "src/migrations"],
   "scripts": {
     "build": "tsc --build tsconfig.build.json",
-    "clean": "tsc --build tsconfig.build.json --clean"
+    "clean": "tsc --build tsconfig.build.json --clean",
+    "migrate": "node ./dist/migrate.js",
+    "migrate:dev": "ts-node ./src/migrate.ts",
+    "test": "pnpm -w exec vitest run --config ./vitest.config.mts ./packages/database"
   },
+
   "dependencies": {
     "pg": "^8.13.0"
   },
   "devDependencies": {
     "@types/pg": "^8.11.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "ts-node": "^10.9.1",
+    "@types/node": "^20.6.0"
   }
 }

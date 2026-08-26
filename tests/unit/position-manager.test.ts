@@ -1,5 +1,10 @@
 import { PositionManager } from '@mayhem/trading-engine/position-manager';
 import { TradingConfig } from '@mayhem/trading-engine/types';
+import { parseAmount } from '@mayhem/trading-engine/calculations';
+
+function expectAmount(actual: string, expected: string): void {
+  expect(parseAmount(actual).equals(parseAmount(expected))).toBe(true);
+}
 
 function makeConfig(overrides: Partial<TradingConfig> = {}): TradingConfig {
   return {
@@ -39,67 +44,67 @@ describe('PositionManager', () => {
 
   describe('openPosition', () => {
     it('creates a position with correct fields', () => {
-      const pos = pm.openPosition('MINT1', 0.001, 1000, 'tx123');
+      const pos = pm.openPosition('MINT1', '0.001', '1000', 'tx123');
 
       expect(pos.id).toBeDefined();
       expect(pos.tokenMint).toBe('MINT1');
-      expect(pos.entryPrice).toBe(0.001);
-      expect(pos.quantity).toBe(1000);
+      expect(pos.entryPrice).toBe('0.001');
+      expect(pos.quantity).toBe('1000');
       expect(pos.entryTx).toBe('tx123');
       expect(pos.status).toBe('open');
-      expect(pos.unrealizedPnl).toBe(0);
-      expect(pos.realizedPnl).toBe(0);
+      expect(pos.unrealizedPnl).toBe('0');
+      expect(pos.realizedPnl).toBe('0');
       expect(pos.exitReason).toBeNull();
-      expect(pos.stopLoss).toBeCloseTo(0.001 * 0.9);
-      expect(pos.takeProfit).toBeCloseTo(0.001 * 1.2);
-      expect(pos.trailingStop).toBeCloseTo(0.001 * 0.92);
-      expect(pos.trailingStopHighPrice).toBe(0.001);
+      expectAmount(pos.stopLoss, '0.0009');
+      expectAmount(pos.takeProfit, '0.0012');
+      expectAmount(pos.trailingStop, '0');
+      expect(pos.trailingStopHighPrice).toBe('0.001');
     });
 
     it('sets entryTx to null when not provided', () => {
-      const pos = pm.openPosition('MINT1', 0.001, 1000);
+      const pos = pm.openPosition('MINT1', '0.001', '1000');
       expect(pos.entryTx).toBeNull();
     });
   });
 
   describe('updatePosition', () => {
     it('calculates unrealized P/L correctly', () => {
-      const pos = pm.openPosition('M', 1.0, 100);
-      const update = pm.updatePosition(pos.id, 1.5);
+      const pos = pm.openPosition('M', '1', '100');
+      const update = pm.updatePosition(pos.id, '1.5');
 
-      expect(update.unrealizedPnl).toBeCloseTo(50); // (1.5-1.0)*100
+      expectAmount(update.unrealizedPnl, '50'); // (1.5-1.0)*100
     });
 
     it('triggers take-profit when price rises above TP threshold', () => {
-      const pos = pm.openPosition('M', 1.0, 100);
+      const pos = pm.openPosition('M', '1', '100');
       // TP = 1.0 * 1.2 = 1.2
-      const update = pm.updatePosition(pos.id, 1.25);
+      const update = pm.updatePosition(pos.id, '1.25');
       const tp = update.exitConditions.find(c => c.type === 'take_profit');
       expect(tp!.triggered).toBe(true);
     });
 
     it('triggers stop-loss when price drops below SL threshold', () => {
-      const pos = pm.openPosition('M', 1.0, 100);
+      const pos = pm.openPosition('M', '1', '100');
       // SL = 1.0 * 0.9 = 0.9
-      const update = pm.updatePosition(pos.id, 0.85);
+      const update = pm.updatePosition(pos.id, '0.85');
       const sl = update.exitConditions.find(c => c.type === 'stop_loss');
       expect(sl!.triggered).toBe(true);
     });
 
     it('triggers trailing stop correctly (price rises then falls)', () => {
-      const pos = pm.openPosition('M', 1.0, 100);
+      const pos = pm.openPosition('M', '1', '100');
       // price rises to 2.0 -> trailingStopHighPrice=2.0, trailingStop=2.0*0.92=1.84
-      pm.updatePosition(pos.id, 2.0);
+      pm.updatePosition(pos.id, '2');
       // price drops to 1.80 -> below 1.84 trailing stop
-      const update = pm.updatePosition(pos.id, 1.80);
+      const update = pm.updatePosition(pos.id, '1.8');
       const ts = update.exitConditions.find(c => c.type === 'trailing_stop');
       expect(ts!.triggered).toBe(true);
     });
 
     it('triggers time exit after max hold seconds', () => {
       const pm2 = new PositionManager(makeConfig({ maxHoldSeconds: 0 }));
-      const pos = pm2.openPosition('M', 1.0, 100);
-      const update = pm2.updatePosition(pos.id, 1.0);
+      const pos = pm2.openPosition('M', '1', '100');
+      const update = pm2.updatePosition(pos.id, '1');
       const te = update.exitConditions.find(c => c.type === 'time_exit');
       expect(te!.triggered).toBe(true);
     });
@@ -114,18 +119,18 @@ describe('PositionManager', () => {
     // instead of a quoted exit price — see finding F7. Selling 100 units
     // at 1.5 means proceeds of 150.
     it('sets status to closed and records exit', () => {
-      const pos = pm.openPosition('M', 1.0, 100);
+      const pos = pm.openPosition('M', '1', '100');
       const closed = pm.closePosition(
         pos.id,
-        { soldQuantity: 100, proceeds: 150, exitTx: 'exitTx1' },
+        { soldQuantity: '100', proceeds: '150', exitTx: 'exitTx1' },
         'take_profit',
       );
 
       expect(closed.status).toBe('closed');
       expect(closed.exitReason).toBe('take_profit');
       expect(closed.exitTx).toBe('exitTx1');
-      expect(closed.realizedPnl).toBeCloseTo(50);
-      expect(closed.unrealizedPnl).toBe(0);
+      expectAmount(closed.realizedPnl, '50');
+      expect(closed.unrealizedPnl).toBe('0');
     });
 
     it('throws for unknown position id', () => {

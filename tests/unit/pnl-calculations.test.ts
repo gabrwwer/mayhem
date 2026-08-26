@@ -4,6 +4,11 @@
 // the bot actually loads.
 import { PositionManager } from '@mayhem/trading-engine';
 import type { TradingConfig } from '@mayhem/trading-engine';
+import { parseAmount } from '../../packages/trading-engine/src/calculations';
+
+function expectAmount(actual: string, expected: string): void {
+  expect(parseAmount(actual).equals(parseAmount(expected))).toBe(true);
+}
 
 function makeConfig(overrides: Partial<TradingConfig> = {}): TradingConfig {
   return {
@@ -42,55 +47,55 @@ describe('PnL Calculations', () => {
   });
 
   test('profit scenario: +50% price increase', () => {
-    const pos = pm.openPosition('MINT1', 1.0, 100);
-    const update = pm.updatePosition(pos.id, 1.5);
-    expect(update.unrealizedPnl).toBeCloseTo(50);
+    const pos = pm.openPosition('MINT1', '1', '100');
+    const update = pm.updatePosition(pos.id, '1.5');
+    expectAmount(update.unrealizedPnl, '50');
   });
 
   test('loss scenario: -25% price decrease', () => {
-    const pos = pm.openPosition('MINT1', 1.0, 100);
-    const update = pm.updatePosition(pos.id, 0.75);
-    expect(update.unrealizedPnl).toBeCloseTo(-25);
+    const pos = pm.openPosition('MINT1', '1', '100');
+    const update = pm.updatePosition(pos.id, '0.75');
+    expectAmount(update.unrealizedPnl, '-25');
   });
 
   test('break-even', () => {
-    const pos = pm.openPosition('MINT1', 1.0, 100);
-    const update = pm.updatePosition(pos.id, 1.0);
-    expect(update.unrealizedPnl).toBeCloseTo(0);
+    const pos = pm.openPosition('MINT1', '1', '100');
+    const update = pm.updatePosition(pos.id, '1');
+    expectAmount(update.unrealizedPnl, '0');
   });
 
   test('take profit triggers at exactly threshold', () => {
     const pm20 = new PositionManager(makeConfig({ takeProfitPercent: 20 }));
-    const pos = pm20.openPosition('MINT1', 1.0, 100);
-    const update = pm20.updatePosition(pos.id, 1.2);
+    const pos = pm20.openPosition('MINT1', '1', '100');
+    const update = pm20.updatePosition(pos.id, '1.2');
     const tpCondition = update.exitConditions.find(c => c.type === 'take_profit');
     expect(tpCondition?.triggered).toBe(true);
   });
 
   test('stop loss triggers at exactly threshold', () => {
     const pm10 = new PositionManager(makeConfig({ stopLossPercent: 10 }));
-    const pos = pm10.openPosition('MINT1', 1.0, 100);
-    const update = pm10.updatePosition(pos.id, 0.9);
+    const pos = pm10.openPosition('MINT1', '1', '100');
+    const update = pm10.updatePosition(pos.id, '0.9');
     const slCondition = update.exitConditions.find(c => c.type === 'stop_loss');
     expect(slCondition?.triggered).toBe(true);
   });
 
   test('trailing stop: price rises 50%, then drops 8% from high', () => {
     const pm8 = new PositionManager(makeConfig({ trailingStopPercent: 8 }));
-    const pos = pm8.openPosition('MINT1', 1.0, 100);
+    const pos = pm8.openPosition('MINT1', '1', '100');
 
-    pm8.updatePosition(pos.id, 1.5);
-    const update = pm8.updatePosition(pos.id, 1.5 * 0.92);
+    pm8.updatePosition(pos.id, '1.5');
+    const update = pm8.updatePosition(pos.id, '1.38');
     const tsCondition = update.exitConditions.find(c => c.type === 'trailing_stop');
     expect(tsCondition?.triggered).toBe(true);
   });
 
   test('trailing stop: price rises but drop is insufficient', () => {
     const pm8 = new PositionManager(makeConfig({ trailingStopPercent: 8 }));
-    const pos = pm8.openPosition('MINT1', 1.0, 100);
+    const pos = pm8.openPosition('MINT1', '1', '100');
 
-    pm8.updatePosition(pos.id, 1.5);
-    const update = pm8.updatePosition(pos.id, 1.5 * 0.95);
+    pm8.updatePosition(pos.id, '1.5');
+    const update = pm8.updatePosition(pos.id, '1.425');
     const tsCondition = update.exitConditions.find(c => c.type === 'trailing_stop');
     expect(tsCondition?.triggered).toBe(false);
   });

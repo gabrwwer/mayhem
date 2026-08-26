@@ -36,7 +36,7 @@ These hold system-wide and are enforced in code, not by convention:
 
 ## Getting started
 
-Requires Node.js 22.13 or newer (see `.nvmrc`).
+Requires Node.js 22.13.x (see `.nvmrc`).
 
 ```bash
 nvm use

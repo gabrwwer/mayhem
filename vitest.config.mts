@@ -1,39 +1,34 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
-/**
- * No module aliases.
- *
- * A temporary alias block mirrored a tsconfig `paths` bridge while the
- * @mayhem/* sources lived inside node_modules. Both are gone: packages/*
- * is restored and pnpm links the workspace, so Vitest resolves the same way
- * Node does. Keeping aliases around after that point is a liability — they
- * silently win over the real link, so the tests can pass against code the
- * application never loads.
- */
+// Resolve repository root relative to this file so Vitest behaves the same
+// regardless of the current working directory when invoked from packages.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname);
+
 export default defineConfig({
+  root: repoRoot,
   test: {
     environment: 'node',
     globals: true,
-    // This file previously pointed at a setup file that did not exist,
-    // which made Vitest fail before collecting a single test.
-    setupFiles: ['./vitest.setup.ts'],
+    setupFiles: [path.resolve(repoRoot, 'vitest.setup.ts')],
     include: [
-      'tests/**/*.test.ts',
-      // Picks up the in-package suites (lock ladder, risk engine verdicts,
-      // core-types schemas) now that the packages are back in the workspace.
-      // While they lived under node_modules they were excluded, so they had
-      // never run.
-      'packages/**/src/**/*.test.ts',
+      // Clean and broad globs per repository requirements
+      'packages/**/*.{test,spec}.{ts,tsx}',
+      'apps/**/*.{test,spec}.{ts,tsx}',
+      'tests/**/*.{test,spec}.{ts,tsx}',
     ],
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
       '**/coverage/**',
       'dashboard-backup-*/**',
+      '**/*.d.ts',
     ],
     coverage: {
       provider: 'v8',
-      reportsDirectory: './coverage',
+      reportsDirectory: path.resolve(repoRoot, 'coverage'),
       include: ['packages/*/src/**/*.ts', 'apps/api/src/**/*.ts', 'apps/bot/src/**/*.ts'],
       exclude: ['**/*.test.ts', '**/__tests__/**', '**/dist/**'],
     },

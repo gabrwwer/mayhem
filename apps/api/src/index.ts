@@ -4,6 +4,7 @@ import fs from "node:fs";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { createRoutes } from "./routes";
 import { BotState } from "./state";
@@ -105,7 +106,7 @@ app.use(
 app.use(
   express.json({
     limit: "256kb",
-    verify: (req, _res, buf) => {
+    verify: (req: IncomingMessage, _res: ServerResponse, buf: Buffer) => {
       (req as express.Request & { rawBody?: string }).rawBody = buf.toString("utf8");
     },
   }),
@@ -141,16 +142,16 @@ state.startedAt = new Date();
  */
 const configuredTokens = [
   process.env['API_AUTH_TOKEN'],
-  ...((process.env['API_KEYS'] as string | undefined) ?? "")
+  ...((process.env['API_KEYS'] ?? "")
     .split(",")
     .map((value) => value.trim())
-    .filter(Boolean),
+    .filter(Boolean)),
 ].filter(
   (value): value is string => Boolean(value),
 );
 
 const production =
-  (process.env['NODE_ENV'] as string | undefined) === "production";
+  process.env['NODE_ENV'] === "production";
 
 /**
  * There is deliberately no API_AUTH_DISABLED escape hatch any more.
@@ -160,7 +161,7 @@ const production =
  * endpoint public. A flag that can disable authentication will eventually
  * be set in the wrong environment.
  */
-if ((process.env['API_AUTH_DISABLED'] as string | undefined) !== undefined) {
+if (process.env['API_AUTH_DISABLED'] !== undefined) {
   throw new Error(
     "API_AUTH_DISABLED is no longer supported. Remove it and configure " +
       "API_AUTH_TOKEN or API_KEYS instead.",
@@ -206,7 +207,7 @@ const internalRateLimit = createRateLimit({
   max: Number(process.env['INTERNAL_RATE_LIMIT_MAX'] ?? 1200),
 });
 
-const internalSecret = (process.env['INTERNAL_API_SECRET'] as string | undefined) ?? "";
+const internalSecret = process.env['INTERNAL_API_SECRET'] ?? "";
 if (!internalSecret) {
   throw new Error(
     "INTERNAL_API_SECRET is required: /internal routes accept data that is " +
@@ -259,19 +260,14 @@ const routes = createRoutes(state);
  */
 app.get("/api/status", authMiddleware, routes.getStatus);
 app.get("/api/tokens", authMiddleware, routes.getTokens);
-app.get("/api/discoveries", authMiddleware, routes.getDiscoveries);
 app.get("/api/launches", authMiddleware, routes.getLaunches);
 app.get("/api/positions", authMiddleware, routes.getPositions);
-app.get("/api/events", authMiddleware, routes.getEvents);
 app.get("/api/trades", authMiddleware, routes.getTrades);
 app.get("/api/balance", authMiddleware, routes.getBalance);
 app.get("/api/config", authMiddleware, routes.getConfig);
 app.get("/api/config/exits", authMiddleware, routes.getExits);
 app.get("/api/telemetry", authMiddleware, routes.getTelemetry);
-app.get('/api/rejections', authMiddleware, routes.getRejections);
-app.get('/api/portfolio', authMiddleware, routes.getPortfolio);
-app.get('/api/equity', authMiddleware, routes.getEquity);
-app.get('/api/risk', authMiddleware, routes.getRisk);
+app.get("/api/rejections", authMiddleware, routes.getRejections);
 
 /**
  * Internal endpoints (bot -> API sync).
@@ -315,35 +311,40 @@ app.post(
   routes.closePosition,
 );
 
-app.post(
-  "/api/positions/:id/partial-close",
-  authMiddleware,
-  routes.partialClose,
-);
+// Partial close is not currently implemented.
+// app.post(
+//   "/api/positions/:id/partial-close",
+//   authMiddleware,
+//   routes.partialClose,
+// );
 
-app.post(
-  "/api/positions/:id/modify",
-  authMiddleware,
-  routes.modifyPosition,
-);
+// Position modification is not currently implemented.
+// app.post(
+//   "/api/positions/:id/modify",
+//   authMiddleware,
+//   routes.modifyPosition,
+// );
 
-app.post(
-  "/api/positions/:id/stop-loss",
-  authMiddleware,
-  routes.stopLoss,
-);
+// Stop-loss modification is not currently implemented.
+// app.post(
+//   "/api/positions/:id/stop-loss",
+//   authMiddleware,
+//   routes.stopLoss,
+// );
 
-app.post(
-  "/api/positions/:id/trailing-stop",
-  authMiddleware,
-  routes.trailingStop,
-);
+// Trailing-stop modification is not currently implemented.
+// app.post(
+//   "/api/positions/:id/trailing-stop",
+//   authMiddleware,
+//   routes.trailingStop,
+// );
 
-app.post(
-  "/api/positions/:id/take-profit",
-  authMiddleware,
-  routes.takeProfit,
-);
+// Take-profit modification is not currently implemented.
+// app.post(
+//   "/api/positions/:id/take-profit",
+//   authMiddleware,
+//   routes.takeProfit,
+// );
 
 app.post(
   "/api/config",

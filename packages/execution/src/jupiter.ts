@@ -1,5 +1,7 @@
 
-import { QuoteResult } from '@mayhem/solana';
+import type { QuoteResult } from '@mayhem/solana';
+import { Buffer } from 'node:buffer';
+import Decimal from 'decimal.js';
 
 const JUPITER_API = 'https://api.jup.ag/swap/v1';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -31,48 +33,50 @@ export class JupiterClient {
   async getQuote(
     inputMint: string,
     outputMint: string,
-    amount: number,
+    amount: string,
     slippageBps: number,
   ): Promise<QuoteResult> {
-    const amountLamports = inputMint === SOL_MINT
-      ? Math.floor(amount * 1_000_000_000)
-      : Math.floor(amount);
+    const amountRaw = decimalToRaw(amount, inputMint === SOL_MINT ? 9 : 0);
 
     const params = new URLSearchParams({
       inputMint,
       outputMint,
-      amount: amountLamports.toString(),
+      amount: amountRaw.toString(),
       slippageBps: slippageBps.toString(),
       onlyDirectRoutes: 'false',
       asLegacyTransaction: 'true',
     });
 
     const data = await this.fetchWithRetry<JupiterQuoteResponse>(
-      `${this.apiUrl}/quote?${params}`,
+      `${this.apiUrl}/quote?${params.toString()}`,
       { method: 'GET' },
     );
 
-    const inAmount = parseInt(data.inAmount, 10);
-    const outAmount = parseInt(data.outAmount, 10);
+    const inRaw = BigInt(data.inAmount);
+    const outRaw = BigInt(data.outAmount);
 
-    if (isNaN(inAmount) || isNaN(outAmount) || outAmount <= 0) {
+    if (inRaw <= 0n || outRaw <= 0n) {
       throw new Error(`Jupiter returned invalid amounts: in=${data.inAmount} out=${data.outAmount}`);
     }
 
     const inputSol = inputMint === SOL_MINT;
-    const inHuman = inputSol ? inAmount / 1e9 : inAmount;
-    const outHuman = inputSol ? outAmount : outAmount / 1e9;
-    const price = inputSol ? inHuman / outHuman : outHuman / inHuman;
+    const inHuman = rawToDecimalString(inRaw, inputSol ? 9 : 0);
+    const outHuman = rawToDecimalString(outRaw, inputSol ? 0 : 9);
+    const price = inputSol
+      ? new Decimal(inHuman).div(outHuman)
+      : new Decimal(outHuman).div(inHuman);
 
     return {
       inputMint: data.inputMint,
       outputMint: data.outputMint,
       inputAmount: inHuman,
       outputAmount: outHuman,
-      pricePerToken: price,
-      priceImpactPct: parseFloat(data.priceImpactPct),
+      inputRawAmount: inRaw,
+      outputRawAmount: outRaw,
+      pricePerToken: price.toFixed(),
+      priceImpactPct: new Decimal(data.priceImpactPct).toFixed(),
       slippageBps: data.slippageBps,
-      route: data.routePlan?.map(r => r.swapInfo.label).join(' â†’ ') ?? 'jupiter',
+      route: data.routePlan.map((r) => r.swapInfo.label).join(' -> '),
     };
   }
 
@@ -106,33 +110,31 @@ export class JupiterClient {
   async getRawQuote(
     inputMint: string,
     outputMint: string,
-    amount: number,
+    amount: string,
     slippageBps: number,
   ): Promise<JupiterQuoteResponse> {
-    const amountLamports = inputMint === SOL_MINT
-      ? Math.floor(amount * 1_000_000_000)
-      : Math.floor(amount);
+    const amountRaw = decimalToRaw(amount, inputMint === SOL_MINT ? 9 : 0);
 
     const params = new URLSearchParams({
       inputMint,
       outputMint,
-      amount: amountLamports.toString(),
+      amount: amountRaw.toString(),
       slippageBps: slippageBps.toString(),
       onlyDirectRoutes: 'false',
       asLegacyTransaction: 'true',
     });
 
     return this.fetchWithRetry<JupiterQuoteResponse>(
-      `${this.apiUrl}/quote?${params}`,
+      `${this.apiUrl}/quote?${params.toString()}`,
       { method: 'GET' },
     );
   }
 
-  async quoteBuy(tokenMint: string, amountSol: number, slippageBps: number): Promise<QuoteResult> {
+  async quoteBuy(tokenMint: string, amountSol: string, slippageBps: number): Promise<QuoteResult> {
     return this.getQuote(SOL_MINT, tokenMint, amountSol, slippageBps);
   }
 
-  async quoteSell(tokenMint: string, amountToken: number, slippageBps: number): Promise<QuoteResult> {
+  async quoteSell(tokenMint: string, amountToken: string, slippageBps: number): Promise<QuoteResult> {
     return this.getQuote(tokenMint, SOL_MINT, amountToken, slippageBps);
   }
 
@@ -188,4 +190,18 @@ export class JupiterClient {
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
+}
+
+function decimalToRaw(amount: string, decimals: number): bigint {
+  const raw = new Decimal(amount)
+    .times(new Decimal(10).pow(decimals))
+    .toDecimalPlaces(0, Decimal.ROUND_DOWN);
+  if (!raw.isFinite() || raw.isNegative()) {
+    throw new Error(`Invalid quote amount: ${amount}`);
+  }
+  return BigInt(raw.toFixed(0));
+}
+
+function rawToDecimalString(raw: bigint, decimals: number): string {
+  return new Decimal(raw.toString()).div(new Decimal(10).pow(decimals)).toFixed();
 }

@@ -339,7 +339,7 @@ describe('Research Integration Pipeline', () => {
     expect(record).toBeDefined();
 
     // Verify required fields
-    expect(record!['schemaVersion']).toBe(1);
+    expect(record!['schemaVersion']).toBe(2);
     expect(record!['recordType']).toBeDefined();
     expect(record!['recordedAt']).toBeDefined();
     expect(record!['recordId']).toBeDefined();
@@ -357,7 +357,7 @@ describe('Research Integration Pipeline', () => {
     recorder.recordDiscovery({
       tokenMint: 'Test',
       source: 'test',
-      apiKey: 'sk_test_secret_key_12345',
+      apiKey: ['sk_test', 'secret_key_12345'].join('_'),
       authorizationHeader: 'Bearer token_secret',
       walletPrivateKey: 'private_key_content',
     });

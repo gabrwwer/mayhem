@@ -1,6 +1,7 @@
 
 import { PositionManager } from '../position-manager';
 import { TradingConfig } from '../types';
+import { parseAmount } from '../calculations';
 
 const BASE_CONFIG: TradingConfig = {
   entryEnabled: true,
@@ -131,7 +132,7 @@ describe('MAYHEM LOCK LADDER V4', () => {
     m.updatePosition(p.id, priceAtPercent(100, 50));
     expect(p.stopLoss).toBeCloseTo(140, 8);
     m.updatePosition(p.id, priceAtPercent(100, 20));
-    expect(p.stopLoss).toBeGreaterThanOrEqual(140 - 1e-8);
+    expect(parseAmount(p.stopLoss).greaterThanOrEqualTo('140')).toBe(true);
   });
 
   // 11. trailing cannot lower ladder lock
@@ -141,7 +142,7 @@ describe('MAYHEM LOCK LADDER V4', () => {
     m.updatePosition(p.id, priceAtPercent(100, 50));
     const lockAfter50 = p.stopLoss;
     m.updatePosition(p.id, priceAtPercent(100, 16));
-    expect(p.stopLoss).toBeGreaterThanOrEqual(lockAfter50 - 1e-8);
+    expect(parseAmount(p.stopLoss).greaterThanOrEqualTo(lockAfter50)).toBe(true);
   });
 
   // 12. repeated updatePosition() calls are idempotent
@@ -319,7 +320,7 @@ describe('Trailing stop', () => {
     const m = createManager({ trailingActivationPercent: 0 });
     const p = openAt(m, 100);
     m.updatePosition(p.id, priceAtPercent(100, 10));
-    expect(p.trailingStop).toBe(0);
+    expect(p.trailingStop).toBe('0');
   });
 
   // 42. high-water mark only increases
@@ -339,7 +340,7 @@ describe('Trailing stop', () => {
     m.updatePosition(p.id, priceAtPercent(100, 50));
     const ts1 = p.trailingStop;
     m.updatePosition(p.id, priceAtPercent(100, 20));
-    expect(p.trailingStop).toBeGreaterThanOrEqual(ts1);
+    expect(parseAmount(p.trailingStop).greaterThanOrEqualTo(ts1)).toBe(true);
   });
 
   // 44. trailing cannot lower ladder stop
@@ -349,7 +350,7 @@ describe('Trailing stop', () => {
     m.updatePosition(p.id, priceAtPercent(100, 75));
     expect(p.stopLoss).toBeCloseTo(160, 8);
     m.updatePosition(p.id, priceAtPercent(100, 16));
-    expect(p.stopLoss).toBeGreaterThanOrEqual(160 - 1e-8);
+    expect(parseAmount(p.stopLoss).greaterThanOrEqualTo('160')).toBe(true);
   });
 
   test('trailing stop does not trigger when trailingStop is 0', () => {

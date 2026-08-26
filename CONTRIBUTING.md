@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-nvm use          # Node 22.13+
+nvm use          # Node 22.13.x
 pnpm install --frozen-lockfile
 pnpm run build
 ```

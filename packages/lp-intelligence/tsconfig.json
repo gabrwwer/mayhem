@@ -5,7 +5,8 @@
     "composite": false,
     "incremental": false,
     "declaration": false,
-    "declarationMap": false
+    "declarationMap": false,
+    "types": ["node", "vitest/globals"]
   },
   "include": ["src/**/*.ts"]
 }

@@ -1,7 +1,22 @@
-
 import { Connection, PublicKey, ParsedTransactionWithMeta, Finality } from '@solana/web3.js';
-import { EventEmitter } from 'events';
-import { RAYDIUM_AMM_V4, RAYDIUM_CPMM, SOL_MINT } from '@mayhem/solana';
+import { EventEmitter } from "node:events";
+
+declare const console: {
+  log(...args: unknown[]): void;
+  warn(...args: unknown[]): void;
+};
+
+// Keep these protocol identifiers local so this package does not depend on
+// the workspace-only @mayhem/solana path alias at compile time.
+const RAYDIUM_AMM_V4 = new PublicKey(
+  '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8',
+);
+
+const RAYDIUM_CPMM = new PublicKey(
+  'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C',
+);
+
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
 const INIT_DISCRIMINATORS = [
   'initialize2',
@@ -141,7 +156,6 @@ export class MempoolMonitor extends EventEmitter {
             }
           }
 
-          this.emit('pending-lp', event);
         },
         'processed',
       );
@@ -417,4 +431,8 @@ export class MempoolMonitor extends EventEmitter {
       this.seenSignatures.add(signature);
     }
   }
+}
+
+function setTimeout(resolve: (value: unknown) => void, delayMs: number): void {
+  globalThis.setTimeout(resolve, delayMs);
 }

@@ -25,7 +25,7 @@ export async function postInternalFlow(obs: InternalObservation): Promise<void> 
     const signature = signInternalPayload(secret, ts, raw);
 
     const start = Date.now();
-    const res = await fetch(url, {
+    const res = (await fetch(url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -33,7 +33,12 @@ export async function postInternalFlow(obs: InternalObservation): Promise<void> 
         'x-mayhem-signature': signature,
       },
       body: raw,
-    });
+    })) as unknown as {
+      ok: boolean;
+      status: number;
+      statusText: string;
+      text(): Promise<string>;
+    };
 
     const latency = Date.now() - start;
 

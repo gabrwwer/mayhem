@@ -16,9 +16,12 @@
     ,"./*": "./src/*.ts"
   },
   "files": ["dist"],
+  "dependencies": {
+    "decimal.js": "^10.4.3"
+  },
   "scripts": {
     "build": "tsc --build tsconfig.build.json",
     "clean": "tsc --build tsconfig.build.json --clean",
-    "test": "vitest run --config ../../vitest.config.mts"
+    "test": "pnpm -w exec vitest run --config ./vitest.config.mts ./packages/trading-engine"
   }
 }

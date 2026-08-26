@@ -20,6 +20,11 @@ export interface StateTransition {
 }
 
 export interface Candidate {
+  passingCandidateData?: {
+    riskScore: number;
+    momentumConfirmed: boolean;
+    riskLevel: string;
+  };
   id: string;
   tokenMint: string;
   source: string;

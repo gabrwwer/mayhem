@@ -4,6 +4,33 @@ import bs58 from "bs58";
 
 const BLOCK_ENGINE = "https://mainnet.block-engine.jito.wtf/api/v1/bundles";
 
+// Hardcoded fallback tip accounts (updated monthly from https://jito.wtf/status)
+// As of 2026-08-22, these are known Jito tip accounts
+const FALLBACK_TIP_ACCOUNTS = [
+  "96gYZvHQu7B34M666DtfPlS4CH3hWXS7KDLsV6N5h4T9",
+  "HFqU5x63VTtX1S2D5bDMsKA8p8RfsTG8dvhdQFgSrCQn",
+  "ADaUvJ46Lw8Q3PjYo5KEcsSYajcg4CB54sSQcWQ43V5m",
+  "DZjycnDFDCI6NMeiLqXS7JJYWfRwVWmj99ThpZjSLwQ9",
+];
+
+const TIP_ACCOUNTS_RETRY_CONFIG = {
+  maxRetries: 3,
+  backoffMs: 100,
+  maxBackoffMs: 1000,
+};
+
+function parseValidTipAccounts(values: string[]): PublicKey[] {
+  const accounts: PublicKey[] = [];
+  for (const value of values) {
+    try {
+      accounts.push(new PublicKey(value));
+    } catch {
+      // Ignore malformed provider data and continue with validated accounts.
+    }
+  }
+  return accounts;
+}
+
 export type BundleStatus = "Invalid" | "Pending" | "Landed";
 
 interface InflightStatus {
@@ -15,21 +42,113 @@ interface InflightStatus {
 export class JitoClient {
   private tipAccountsCache: PublicKey[] | null = null;
   private tipAccountsAt = 0;
-  private readonly tipAccountsTtlMs = 60_000;
+  private tipAccountsLastError: Error | null = null;
 
   constructor(
     private readonly endpoint: string = BLOCK_ENGINE,
-    private readonly opts: { retries?: number; backoffMs?: number; timeoutMs?: number } = {},
+    private readonly opts: {
+      retries?: number;
+      backoffMs?: number;
+      timeoutMs?: number;
+      pollMs?: number;
+      tipAccountsTtlMs?: number;
+    } = {},
   ) {}
 
+  /**
+   * Get tip accounts with retry and fallback.
+   * 
+   * Strategy:
+   * 1. Return fresh cache if available
+   * 2. Retry API call with exponential backoff
+   * 3. Use stale cache if API fails (up to 5 minutes old)
+   * 4. Fall back to hardcoded accounts if cache expired
+   * 5. Log warnings for monitoring
+   */
   async tipAccounts(): Promise<PublicKey[]> {
-    if (this.tipAccountsCache && Date.now() - this.tipAccountsAt < this.tipAccountsTtlMs) {
+    const tipAccountsTtlMs = this.opts.tipAccountsTtlMs ?? 60_000;
+    const staleAgeLimitMs = 5 * 60_000; // 5 minutes max stale age
+    const now = Date.now();
+
+    // 1. Return fresh cache if available
+    if (
+      this.tipAccountsCache &&
+      now - this.tipAccountsAt < tipAccountsTtlMs
+    ) {
+      this.tipAccountsLastError = null; // Clear error
       return this.tipAccountsCache;
     }
-    const accounts = (await this.rpc("getTipAccounts", [])) as string[];
-    this.tipAccountsCache = accounts.map((a) => new PublicKey(a));
-    this.tipAccountsAt = Date.now();
-    return this.tipAccountsCache;
+
+    // 2. Try to fetch fresh accounts with retry
+    let lastError: Error | null = null;
+    const maxRetries = Math.max(1, this.opts.retries ?? TIP_ACCOUNTS_RETRY_CONFIG.maxRetries);
+    const backoffMsBase = Math.max(0, this.opts.backoffMs ?? TIP_ACCOUNTS_RETRY_CONFIG.backoffMs);
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        const accounts = (await this.rpc("getTipAccounts", [])) as string[];
+
+        const validAccounts = parseValidTipAccounts(accounts);
+        if (validAccounts.length === 0) {
+          throw new Error("getTipAccounts returned empty list");
+        }
+
+        // Cache successful response
+        this.tipAccountsCache = validAccounts;
+        this.tipAccountsAt = now;
+        this.tipAccountsLastError = null;
+
+        return this.tipAccountsCache;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+
+        // Exponential backoff: 100ms, 200ms, 400ms
+        if (i < maxRetries - 1) {
+          const backoffMs = Math.min(
+            backoffMsBase * Math.pow(2, i),
+            TIP_ACCOUNTS_RETRY_CONFIG.maxBackoffMs,
+          );
+          await new Promise((r) => setTimeout(r, backoffMs));
+        }
+      }
+    }
+
+    // 3. Use stale cache if available and not too old
+    if (this.tipAccountsCache) {
+      const cacheAge = now - this.tipAccountsAt;
+      if (cacheAge < staleAgeLimitMs) {
+        this.tipAccountsLastError = lastError;
+        console.warn(
+          `Using stale tip accounts cache (age: ${cacheAge}ms): ${lastError?.message}`,
+        );
+        return this.tipAccountsCache;
+      }
+    }
+
+    // 4. Fall back to hardcoded accounts
+    this.tipAccountsLastError = lastError;
+    console.error(
+      `Jito getTipAccounts failed after ${maxRetries} retries, ` +
+      `falling back to hardcoded tip accounts: ${lastError?.message}`,
+    );
+
+    const fallbackAccounts = parseValidTipAccounts(FALLBACK_TIP_ACCOUNTS);
+    if (fallbackAccounts.length === 0) {
+      throw new Error("No valid Jito tip accounts available");
+    }
+
+    // Cache the fallback (but mark it as potentially stale)
+    this.tipAccountsCache = fallbackAccounts;
+    this.tipAccountsAt = now - tipAccountsTtlMs - 1; // Force a refresh on the next call
+
+    return fallbackAccounts;
+  }
+
+  /**
+   * Get the last error encountered when fetching tip accounts.
+   * Useful for alerting on persistent API failures.
+   */
+  getTipAccountsLastError(): Error | null {
+    return this.tipAccountsLastError;
   }
 
   // Tip = plain SOL transfer to the current leader's tip account.
@@ -117,8 +236,13 @@ export class JitoClient {
   async waitForLanding(
     bundleId: string,
     timeoutMs = 30_000,
-    pollMs = 300,
-  ): Promise<{ status: BundleStatus | "Timeout"; bundleId: string; pollErrors: number }> {
+    pollMs = this.opts.pollMs ?? 300,
+  ): Promise<{
+    status: BundleStatus | "Timeout";
+    bundleId: string;
+    pollErrors: number;
+    transactions?: string[];
+  }> {
     const deadline = Date.now() + timeoutMs;
     let pollErrors = 0;
 
@@ -126,7 +250,10 @@ export class JitoClient {
       try {
         const status = await this.bundleStatus(bundleId);
         if (status === "Landed" || status === "Invalid") {
-          return { status, bundleId, pollErrors };
+          const details = await this.bundleDetails(bundleId);
+          return details?.transactions
+            ? { status, bundleId, pollErrors, transactions: details.transactions }
+            : { status, bundleId, pollErrors };
         }
       } catch {
         pollErrors += 1;
@@ -139,10 +266,14 @@ export class JitoClient {
 
   /** Single status probe. Used for post-ambiguity reconciliation. */
   async bundleStatus(bundleId: string): Promise<BundleStatus | "Unknown"> {
+    return (await this.bundleDetails(bundleId))?.status ?? "Unknown";
+  }
+
+  async bundleDetails(bundleId: string): Promise<InflightStatus | null> {
     const res = (await this.rpc("getInflightBundleStatuses", [[bundleId]])) as {
       value?: InflightStatus[];
     };
-    return res?.value?.[0]?.status ?? "Unknown";
+    return res?.value?.[0] ?? null;
   }
 
   private async rpc(method: string, params: unknown[]): Promise<unknown> {

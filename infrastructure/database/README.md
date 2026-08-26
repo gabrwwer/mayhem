@@ -1,1 +1,0 @@
-Directory retained from previous mayhem-bot import; database infra manifests live in `infrastructure/`.

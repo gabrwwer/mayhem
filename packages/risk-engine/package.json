@@ -1,11 +1,11 @@
 
 {
-  "name": "@mayhem/risk-engine",
   "version": "0.1.0",
   "private": true,
   "description": "Synchronous pre-trade risk gate. Every order passes through it or does not trade.",
   "license": "UNLICENSED",
   "type": "commonjs",
+  "name": "@mayhem/risk-engine",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

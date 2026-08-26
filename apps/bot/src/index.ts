@@ -4,7 +4,16 @@ import path from 'node:path';
 import os from 'node:os';
 import { loadConfig } from '@mayhem/config';
 import { SolanaConnection } from '@mayhem/solana';
-import { SimulatedExecutionEngine, isPumpFunToken, readBondingCurve } from '@mayhem/execution';
+import {
+  SimulatedExecutionEngine,
+  SnipeEngine,
+  SnipeEngineAdapter,
+  JitoClient,
+  FeeBudget,
+  isPumpFunToken,
+  readBondingCurve,
+  OrderReconciliationService,
+} from '@mayhem/execution';
 import { PublicKey } from '@solana/web3.js';
 import { enrichToken } from './enrichment';
 import {
@@ -37,6 +46,7 @@ import {
   EngineStateRepository,
   PostgresBreakerStateStore,
   PostgresPositionStore,
+  PostgresOrderStore,
 } from '@mayhem/database';
 import { logger } from './logger';
 import { NewLaunchHandler } from './new-launch-handler';
@@ -44,6 +54,7 @@ import { DryRunTracker } from './dry-run-tracker';
 import { TradeJournal } from './trade-journal';
 import { RiskGateAdapter } from './risk-gate-adapter';
 import { InternalApiClient } from './internal-api-client';
+import { loadLiveWallet } from './wallet-loader';
 
 const VERSION = '1.0.0';
 
@@ -107,6 +118,12 @@ async function main(): Promise<void> {
   const config = loadConfig(envPath);
   const dryRun = config.env.dryRun;
   const tradingEnabled = config.env.tradingEnabled;
+  const useLiveAdapter = config.env.useLiveAdapter;
+  if (useLiveAdapter && (dryRun || !tradingEnabled)) {
+    throw new Error(
+      'USE_LIVE_ADAPTER requires DRY_RUN=false and TRADING_ENABLED=true; refusing to fall back to simulation',
+    );
+  }
   const solanaRpcUrl = envString('SOLANA_RPC_URL', config.rpc.http[0] ?? 'https://api.mainnet-beta.solana.com');
   const solanaBackupRpcUrl = envOptionalString('SOLANA_BACKUP_RPC_URL') ?? config.rpc.http[1] ?? config.rpc.http[2];
 
@@ -118,6 +135,7 @@ async function main(): Promise<void> {
     version: VERSION,
     mode: dryRun ? 'DRY_RUN' : 'LIVE',
     tradingEnabled,
+    useLiveAdapter,
     env: config.env.nodeEnv,
     // redactUrl, not the raw values: these URLs carry the RPC provider API
     // key in the query string, and this line is written before any other
@@ -146,59 +164,58 @@ async function main(): Promise<void> {
   // not what was intended in .env. Use this to debug configuration mismatches.
   logger.info('CONFIG_RESOLVED', {
     // Entry strategy
-    entryMode: envString('MAYHEM_ENTRY_MODE', 'MOMENTUM'),
+    entryMode: envString('ENTRY_MODE', 'MOMENTUM'),
     
     // Risk gate
-    minRiskScore: envNumber('MIN_RISK_SCORE', 80),
+    minRiskScore: envNumber('MIN_RISK_SCORE', 70),
     
     // Position sizing
     maxPositionSol: maxPositionSol,
     maxOpenPositions: maxOpenPositions,
-    maxConcurrentEvaluations: envNumber('MAX_CONCURRENT_EVALUATIONS', 3),
+    maxConcurrentEvaluations: envNumber('MAX_CONCURRENT_EVALUATIONS', 8),
     
-    // Early-flow parameters (if MAYHEM_ENTRY_MODE=EARLY_FLOW)
+    // Early-flow parameters (if ENTRY_MODE=EARLY_FLOW)
     earlyFlowWindowMs: envNumber('EARLY_FLOW_WINDOW_MS', 5000),
     earlyFlowSampleIntervalMs: envNumber('EARLY_FLOW_SAMPLE_INTERVAL_MS', 1000),
     minEarlyFlowSamples: envNumber('MIN_EARLY_FLOW_SAMPLES', 3),
     maxEarlyFlowSamples: envNumber('MAX_EARLY_FLOW_SAMPLES', 5),
-    minNetFlowPct: envNumber('MIN_NET_FLOW_PCT', 1.0),
-    maxEarlyDrawdownPct: envNumber('MAX_EARLY_DRAW_DOWN_PCT', 15),
+    minNetFlowPct: envNumber('MIN_NET_FLOW_PCT', 5),
+    maxEarlyDrawdownPct: envNumber('MAX_EARLY_DRAWDOWN_PCT', 15),
     maxEarlyVolatility: envNumber('MAX_EARLY_VOLATILITY', 0.50),
     
     // Wallet/transaction metrics
-    minUniqueBuyers: envNumber('MIN_UNIQUE_BUYERS', 2),
-    minBuyTransactions: envNumber('MIN_BUY_TRANSACTIONS', 2),
+    minUniqueBuyers: envNumber('MIN_UNIQUE_BUYERS', 3),
+    minBuyTransactions: envNumber('MIN_BUY_TRANSACTIONS', 3),
     maxTopBuyerConcentration: envNumber('MAX_TOP_BUYER_CONCENTRATION', 0.50),
-    maxSellPressure: envNumber('MAX_SELL_PRESSURE', 0.50),
+    maxSellPressure: envNumber('MAX_SELL_PRESSURE', 0.45),
     
-    // Momentum parameters (legacy, if MAYHEM_ENTRY_MODE=MOMENTUM)
+    // Momentum parameters (if ENTRY_MODE=MOMENTUM)
     momentumConfirmDurationMs: envNumber('MOMENTUM_CONFIRM_DURATION_MS', 60000),
-    momentumConfirmIntervalMs: envNumber('MOMENTUM_CONFIRM_INTERVAL_MS', 5000),
-    minMomentumSamples: envNumber('MIN_MOMENTUM_SAMPLES', 10),
-    minMomentumChangePct: envNumber('MIN_MOMENTUM_CHANGE_PCT', 1),
-    minBuyPressure: envNumber('MIN_BUY_PRESSURE', 0.55),
-    maxMomentumDrawdownPct: envNumber('MAX_MOMENTUM_DRAWDOWN_PCT', 15),
+    momentumConfirmIntervalMs: envNumber('MOMENTUM_CONFIRM_INTERVAL_MS', 2000),
+    minMomentumSamples: config.snipe.minMomentumSamples,
+    minMomentumChangePct: envNumber('MIN_MOMENTUM_CHANGE_PCT', 2),
+    minBuyPressure: envNumber('MIN_BUY_PRESSURE', 0.65),
+    maxMomentumDrawdownPct: envNumber('MAX_MOMENTUM_DRAWDOWN_PCT', 10),
     maxMomentumVolatility: envNumber('MAX_MOMENTUM_VOLATILITY', 0.5),
-    maxFlatRatio: envNumber('MAX_FLAT_RATIO', 0.60),
+    maxFlatRatio: envNumber('MAX_FLAT_RATIO', 0.75),
     
     // Execution quality
-    maxSlippagePct: envNumber('MAX_SLIPPAGE_PCT', 15),
+    maxSlippagePct: envNumber('MAX_SLIPPAGE_PCT', 8),
     targetMaxSlippagePct: envNumber('TARGET_MAX_SLIPPAGE_PCT', 5),
     maxEntryPriceImpactBps: envNumber('MAX_ENTRY_PRICE_IMPACT_BPS', 750),
-    maxQuoteAgeMs: envNumber('MAX_QUOTE_AGE_MS', 1000),
+    maxQuoteAgeMs: envNumber('MAX_QUOTE_AGE_MS', 750),
     
     // Exit conditions
-    takeProfitPercent: envNumber('TAKE_PROFIT_PERCENT', 20),
-    stopLossPercent: envNumber('STOP_LOSS_PCT', 8),
-    trailingStopPct: envNumber('TRAILING_STOP_PCT', 25),
-    maxHoldSeconds: envNumber('MAX_HOLD_SECONDS', 3600),
+    takeProfitPercent: config.exit.takeProfitPct,
+    stopLossPercent: envNumber('STOP_LOSS_PCT', 15),
+    trailingStopPct: config.exit.trailingStopPct,
+    maxHoldSeconds: config.exit.maxHoldSeconds,
     minHoldMs: envNumber('MIN_HOLD_MS', 100),
-    maxHoldTimeMs: envNumber('MAX_HOLD_TIME_MS', 3600000),
     
     // Retry & monitoring
-    monitorIntervalMs: envNumber('MONITOR_INTERVAL_MS', 3000),
-    exitRetryMaxAttempts: envNumber('EXIT_RETRY_MAX_ATTEMPTS', 5),
-    exitRetryDelayMs: envNumber('EXIT_RETRY_DELAY_MS', 1000),
+    monitorIntervalMs: envNumber('MONITOR_INTERVAL_MS', 500),
+    exitRetryMaxAttempts: envNumber('EXIT_RETRY_MAX_ATTEMPTS', 7),
+    exitRetryDelayMs: envNumber('EXIT_RETRY_DELAY_MS', 500),
     
     // Simulation
     dryRun: dryRun,
@@ -245,20 +262,32 @@ async function main(): Promise<void> {
   let db: DatabaseClient | null = null;
   let breakerStore: BreakerStateStore;
   let positionStore: PositionStore | undefined;
+  let orderStore: PostgresOrderStore | undefined;
   let stateDurable = false;
 
   if (dbUrl) {
     try {
-      db = new DatabaseClient(dbUrl);
+      db = new DatabaseClient(
+        dbUrl,
+        {
+          maxConnections: envNumber('DATABASE_POOL_MAX', 20),
+          idleTimeoutMs: envNumber('DATABASE_POOL_IDLE_TIMEOUT_MS', 30_000),
+          connectionTimeoutMs: envNumber('DATABASE_CONNECTION_TIMEOUT_MS', 10_000),
+          statementTimeoutMs: envNumber('DATABASE_QUERY_TIMEOUT_MS', 5_000),
+        },
+        logger,
+      );
       await db.connect();
+      await db.query('SELECT 1');
       const engineState = new EngineStateRepository(db);
       await engineState.ensureSchema();
       // Typed explicitly rather than cast — a cast here would hide a shape
       // mismatch in exactly the state that governs the loss limits.
       breakerStore = new PostgresBreakerStateStore<PersistedBreakerState>(engineState);
       positionStore = new PostgresPositionStore<SerializedPosition>(engineState);
+      orderStore = new PostgresOrderStore(engineState);
       stateDurable = true;
-      logger.info('STATE_STORE_READY', { backend: 'postgres' });
+      logger.info('STATE_STORE_READY', { backend: 'postgres', poolStats: db.getPoolStats() });
     } catch (err) {
       logger.error('STATE_STORE_UNAVAILABLE', {
         error: err instanceof Error ? err.message : String(err),
@@ -296,8 +325,8 @@ async function main(): Promise<void> {
     ...config,
     TRADING_ENABLED: tradingEnabled,
     MIN_LIQUIDITY_SOL: minLiquiditySol,
-    MAX_QUOTE_AGE_MS: envNumber('MAX_QUOTE_AGE_MS', 5_000),
-    MAX_ENTRY_PRICE_IMPACT_BPS: envNumber('MAX_ENTRY_PRICE_IMPACT_BPS', 500),
+    MAX_QUOTE_AGE_MS: envNumber('MAX_QUOTE_AGE_MS', 750),
+    MAX_ENTRY_PRICE_IMPACT_BPS: envNumber('MAX_ENTRY_PRICE_IMPACT_BPS', 750),
     MOMENTUM_CONFIRM_ENABLED: envBool('MOMENTUM_CONFIRM_ENABLED', false),
     // Defaults per STRATEGY.md §3.2: 2s cadence over a 60s window. The prior
     // 10s/90s pair yielded ~6 usable samples and could not resolve the phase
@@ -307,28 +336,21 @@ async function main(): Promise<void> {
     // Bounds discovery-side RPC load. Sustained cost is roughly
     // MAX_CONCURRENT_EVALUATIONS / (MOMENTUM_CONFIRM_INTERVAL_MS / 1000)
     // calls per second, before risk evidence and position monitoring.
-    MAX_CONCURRENT_EVALUATIONS: envNumber('MAX_CONCURRENT_EVALUATIONS', 3),
+    MAX_CONCURRENT_EVALUATIONS: envNumber('MAX_CONCURRENT_EVALUATIONS', 8),
     MIN_MOMENTUM_CHANGE_PCT: envNumber('MIN_MOMENTUM_CHANGE_PCT', 2),
+    MIN_NET_FLOW_PCT: envNumber('MIN_NET_FLOW_PCT', 5),
     MIN_BUY_PRESSURE: envNumber('MIN_BUY_PRESSURE', 0.65),
     MAX_MOMENTUM_VOLATILITY: envNumber('MAX_MOMENTUM_VOLATILITY', 0.5),
     MAX_MOMENTUM_DRAWDOWN_PCT: envNumber('MAX_MOMENTUM_DRAWDOWN_PCT', 10),
-    MAX_FLAT_RATIO: envNumber('MAX_FLAT_RATIO', 0.8),
-    MIN_MOMENTUM_SAMPLES: envNumber('MIN_MOMENTUM_SAMPLES', 10),
-    MIN_RISK_SCORE: envNumber('MIN_RISK_SCORE', 80),
+    MAX_FLAT_RATIO: envNumber('MAX_FLAT_RATIO', 0.75),
+    MIN_MOMENTUM_SAMPLES: config.snipe.minMomentumSamples,
+    MIN_RISK_SCORE: envNumber('MIN_RISK_SCORE', 70),
   };
-
-  if (!dryRun && tradingEnabled) {
-    throw new Error(
-      'Live execution is not currently supported by the workspace execution package. ' +
-      'Use DRY_RUN=true or TRADING_ENABLED=false.',
-    );
-  }
-
 
   const tradingConfig: TradingConfig = {
     entryEnabled: tradingEnabled,
     maxPositionSol,
-    takeProfitPercent: envNumber('TAKE_PROFIT_PERCENT', 20),
+    takeProfitPercent: config.exit.takeProfitPct,
     profitMonitorActivationPercent: envNumber('PROFIT_MONITOR_ACTIVATION_PERCENT', 5),
     profitLockActivationPercent: envNumber('PROFIT_LOCK_ACTIVATION_PERCENT', 10),
     profitLockPercent: envNumber('PROFIT_LOCK_PERCENT', 50),
@@ -337,18 +359,18 @@ async function main(): Promise<void> {
     stopLossPercent: config.exit.stopLossPct,
     hardStopLossPercent: config.exit.stopLossPct,
     trailingStopPercent: config.exit.trailingStopPct,
-    maxHoldSeconds: envNumber('MAX_HOLD_SECONDS', 3600),
+    maxHoldSeconds: config.exit.maxHoldSeconds,
     maxOpenPositions,
     entryDelayMs: envNumber('ENTRY_DELAY_MS', 0),
     newLaunchMode: envBool('NEW_LAUNCH_MODE_ENABLED', false),
-    maxQuoteAgeMs: envNumber('MAX_QUOTE_AGE_MS', 5_000),
+    maxQuoteAgeMs: envNumber('MAX_QUOTE_AGE_MS', 750),
     maxSellPriceImpactPercent: envNumber('MAX_SELL_PRICE_IMPACT_PERCENT', 500),
-    exitRetryMaxAttempts: envNumber('EXIT_RETRY_MAX_ATTEMPTS', 3),
-    exitRetryDelayMs: envNumber('EXIT_RETRY_DELAY_MS', 2_000),
+    exitRetryMaxAttempts: envNumber('EXIT_RETRY_MAX_ATTEMPTS', 7),
+    exitRetryDelayMs: envNumber('EXIT_RETRY_DELAY_MS', 500),
 
     // Single source of truth for the entry risk threshold. The engine used
-    // to hardcode 30 while the launch handler enforced MIN_RISK_SCORE (80).
-    minRiskScore: envNumber('MIN_RISK_SCORE', 80),
+    // to hardcode a different value while the launch handler enforced MIN_RISK_SCORE.
+    minRiskScore: envNumber('MIN_RISK_SCORE', 70),
 
     // Was hardcoded as `liquidity * 0.01`.
     maxLiquidityParticipationBps: envNumber('MAX_LIQUIDITY_PARTICIPATION_BPS', 100),
@@ -358,10 +380,20 @@ async function main(): Promise<void> {
     maxPriceAgeMs: envNumber('MAX_PRICE_AGE_MS', 15_000),
 
     takeProfitRetryDelayMs: envNumber('TAKE_PROFIT_RETRY_DELAY_MS', 10_000),
+    expectedExitCostPercent: config.exit.expectedExitCostPct,
+    aggressiveExitOnMomentumReversal: envBool(
+      'AGGRESSIVE_EXIT_ON_MOMENTUM_REVERSAL',
+      true,
+    ),
   };
 
-  const executionEngine = new SimulatedExecutionEngine({
-    slippageBps: envNumber('SLIPPAGE_BPS', config.snipe.maxSlippagePct),
+  let executionEngine: SimulatedExecutionEngine | SnipeEngineAdapter;
+  const simulator = new SimulatedExecutionEngine({
+    // Config is expressed as a percentage; simulator execution consumes bps.
+    slippageBps: envNumber(
+      'SLIPPAGE_BPS',
+      config.snipe.maxSlippagePct * 100,
+    ),
     failureRate: envNumber('SIM_FAILURE_RATE', 0),
     initialSolBalance: envNumber('SIM_INITIAL_SOL', 10),
     volatility: envNumber('SIM_VOLATILITY', 0.05),
@@ -400,19 +432,6 @@ async function main(): Promise<void> {
       note: 'prices are stale until the first monitor tick refreshes them',
     });
   }
-
-  const mayhemEngine = new MayhemEngine(
-    tradingConfig,
-    positionManager,
-    executionEngine,
-    riskEngine,
-    logger,
-    {
-      filePath: path.resolve(process.cwd(), 'data', 'research.jsonl'),
-      dryRun,
-      tradingEnabled,
-    },
-  );
 
   const breakerConfig = {
     maxDailyLossLamports: config.breaker.maxDailyLossLamports,
@@ -460,6 +479,130 @@ async function main(): Promise<void> {
     },
   );
 
+  if (useLiveAdapter) {
+    if (!dbUrl || !db || !orderStore || !stateDurable) {
+      throw new Error('live execution requires verified PostgreSQL persistence');
+    }
+
+    try {
+      if (!/^https?:\/\//.test(config.jito.bundleUrl)) {
+        throw new Error('invalid Jito bundle URL');
+      }
+      if (!Number.isFinite(Number(config.jito.maxTipLamports)) || Number(config.jito.maxTipLamports) < 0) {
+        throw new Error('invalid fee configuration');
+      }
+      const wallet = await loadLiveWallet(process.env, logger);
+      const jito = new JitoClient(config.jito.bundleUrl, {
+        retries: config.jito.sendRetries,
+        backoffMs: config.jito.retryBackoffMs,
+        timeoutMs: config.rpc.timeoutMs,
+        pollMs: config.jito.landingPollMs,
+        tipAccountsTtlMs: config.jito.tipAccountsTtlMs,
+      });
+      const feeBudget = new FeeBudget({
+        strategy: config.jito.tipStrategy,
+        percentile: config.jito.tipPercentile,
+        fixedLamports: Number(config.jito.tipFixedLamports),
+        maxTipLamports: Number(config.jito.maxTipLamports),
+        tipFloorUrl: config.jito.tipFloorUrl,
+        cacheMs: config.jito.tipAccountsTtlMs,
+      });
+      const snipeEngine = new SnipeEngine(
+        solanaConnection.getConnection(),
+        jito,
+        feeBudget,
+        circuitBreaker,
+        {
+          hotWallet: wallet,
+          positionSolLamports: config.snipe.positionLamports,
+          maxSlippagePct: config.snipe.maxSlippagePct,
+          maxConcurrentPositions: config.snipe.maxConcurrentPositions,
+          maxTxAgeMs: config.snipe.maxTxAgeMs,
+          landingTimeoutMs: config.jito.landingTimeoutMs,
+          preflightSim: config.snipe.preflightSim,
+          orderStore,
+        },
+      );
+      executionEngine = new SnipeEngineAdapter(snipeEngine, logger);
+      logger.info('LIVE_EXECUTION_ENGINE_SELECTED', {
+        wallet: wallet.publicKey.toBase58(),
+        persistence: 'postgres',
+        jito: redactUrl(config.jito.bundleUrl),
+      });
+    } catch (error) {
+      logger.error('LIVE_EXECUTION_INITIALIZATION_FAILED', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  } else {
+    executionEngine = simulator;
+    logger.info('SIMULATED_EXECUTION_ENGINE_SELECTED', {
+      dryRun,
+      tradingEnabled,
+      useLiveAdapter: config.env.useLiveAdapter,
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Order Reconciliation on Startup (Live Adapter Only)
+  // ─────────────────────────────────────────────────────────────────────
+  if (useLiveAdapter && db && orderStore && stateDurable) {
+    try {
+      const jito = (executionEngine as SnipeEngineAdapter).engine?.jitoClient;
+      if (!jito) {
+        throw new Error('Jito client not available for reconciliation');
+      }
+
+      const reconciliationService = new OrderReconciliationService(
+        solanaConnection.getConnection(),
+        jito,
+        db,
+        new EngineStateRepository(db),
+        logger,
+        envNumber('RECONCILIATION_TIMEOUT_MS', 30_000),
+      );
+
+      let reconciliationResult = null;
+      if (envBool('RECONCILE_ON_STARTUP', true)) {
+        try {
+          reconciliationResult = await reconciliationService.reconcileOnStartup();
+          await reconciliationService.logReconciliation(reconciliationResult);
+          
+          if (reconciliationResult.orphanedPositions.length > 0) {
+            logger.warn('Orphaned positions detected during reconciliation', {
+              count: reconciliationResult.orphanedPositions.length,
+              positions: reconciliationResult.orphanedPositions,
+            });
+          }
+        } catch (err) {
+          logger.error('Order reconciliation failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw err;
+        }
+      }
+    } catch (error) {
+      logger.error('ORDER_RECONCILIATION_INITIALIZATION_FAILED', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  const mayhemEngine = new MayhemEngine(
+    tradingConfig,
+    positionManager,
+    executionEngine,
+    riskEngine,
+    logger,
+    {
+      filePath: path.resolve(process.cwd(), 'data', 'research.jsonl'),
+      dryRun,
+      tradingEnabled,
+    },
+  );
+
   /*
    * Discard persisted breaker state and re-base peak equity to the current
    * balance.
@@ -498,8 +641,8 @@ async function main(): Promise<void> {
     {
       canSell: async (tokenMint: string) => {
         try {
-          const quote = await executionEngine.quoteSell(tokenMint, 1);
-          return Number.isFinite(quote?.outputAmount) && quote.outputAmount > 0;
+          const quote = await executionEngine.quoteSell(tokenMint, '1');
+          return quote?.outputAmount != null && Number.isFinite(Number(quote.outputAmount)) && Number(quote.outputAmount) > 0;
         } catch {
           return false;
         }
@@ -904,9 +1047,9 @@ async function main(): Promise<void> {
       minBuyPressure: envNumber('MIN_BUY_PRESSURE', 0.65),
       maxMomentumVolatility: envNumber('MAX_MOMENTUM_VOLATILITY', 0.5),
       maxMomentumDrawdownPct: envNumber('MAX_MOMENTUM_DRAWDOWN_PCT', 10),
-      minMomentumSamples: envNumber('MIN_MOMENTUM_SAMPLES', 10),
-      momentumWindowMs: envNumber('MOMENTUM_CONFIRM_DURATION_MS', 60_000),
-      momentumIntervalMs: envNumber('MOMENTUM_CONFIRM_INTERVAL_MS', 2_000),
+      minMomentumSamples: envNumber('MIN_MOMENTUM_SAMPLES', 4),
+      momentumWindowMs: envNumber('MOMENTUM_CONFIRM_DURATION_MS', 60000),
+      momentumIntervalMs: envNumber('MOMENTUM_CONFIRM_INTERVAL_MS', 2000),
       minLiquiditySol,
     },
     envString('TRADE_JOURNAL_PATH', 'data/trades.jsonl'),
@@ -998,7 +1141,7 @@ async function main(): Promise<void> {
   // per second per open position — the single largest source of RPC load
   // in the process, and it competed with the discovery and exit-quote calls
   // that actually matter.
-  mayhemEngine.start(envNumber('MONITOR_INTERVAL_MS', 1_000));
+  mayhemEngine.start(envNumber('MONITOR_INTERVAL_MS', 500));
 
   /*
    * Mirror open positions and wallet balance to the API for the dashboard.

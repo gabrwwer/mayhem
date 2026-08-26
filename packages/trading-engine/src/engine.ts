@@ -1,6 +1,7 @@
 
-import { EventEmitter } from 'events';
-import path from 'node:path';
+import * as path from 'node:path';
+import { clearInterval, setInterval } from 'node:timers';
+import Decimal from 'decimal.js';
 import {
   TradingConfig,
   TradeSignal,
@@ -14,6 +15,51 @@ import { PositionManager } from './position-manager';
 import { isFilled, isUnresolved, ExecutionResult } from './execution-result';
 import { ResearchRecorder, ResearchRecorderOptions } from './research-recorder';
 import { PriceLifecycleEvent } from './research-metrics';
+import { calculatePositionSize } from './position-sizing';
+import { DecimalValue, parseAmount } from './calculations';
+
+// Keep this module buildable in environments that do not include Node's
+// ambient type definitions.
+declare const process: {
+  env: Record<string, string | undefined>;
+};
+
+/** Minimal EventEmitter implementation for builds without Node typings. */
+class EventEmitter {
+  private readonly listeners = new Map<string | symbol, Set<(...args: any[]) => void>>();
+
+  on(event: string | symbol, listener: (...args: any[]) => void): this {
+    let eventListeners = this.listeners.get(event);
+    if (!eventListeners) {
+      eventListeners = new Set();
+      this.listeners.set(event, eventListeners);
+    }
+    eventListeners.add(listener);
+    return this;
+  }
+
+  once(event: string | symbol, listener: (...args: any[]) => void): this {
+    const wrapped = (...args: any[]): void => {
+      this.off(event, wrapped);
+      listener(...args);
+    };
+    return this.on(event, wrapped);
+  }
+
+  off(event: string | symbol, listener: (...args: any[]) => void): this {
+    const eventListeners = this.listeners.get(event);
+    eventListeners?.delete(listener);
+    if (eventListeners?.size === 0) this.listeners.delete(event);
+    return this;
+  }
+
+  emit(event: string | symbol, ...args: any[]): boolean {
+    const eventListeners = this.listeners.get(event);
+    if (!eventListeners?.size) return false;
+    for (const listener of [...eventListeners]) listener(...args);
+    return true;
+  }
+}
 
 /** Minimal structured-logger contract. */
 export interface EngineLogger {
@@ -34,9 +80,9 @@ interface ExitTrigger {
   /** Epoch millis at which the exit condition fired. */
   at: number;
   /** Last known market price when the condition fired. */
-  price: number;
+  price: DecimalValue;
   /** The level the condition tested against, or null if not price-based. */
-  threshold: number | null;
+  threshold: DecimalValue | null;
 }
 
 /**
@@ -45,7 +91,7 @@ interface ExitTrigger {
  * `time_exit` and `stale_price` are not price-based, so they have no
  * threshold — reporting one would invite a meaningless comparison.
  */
-function thresholdForReason(position: Position, reason: string): number | null {
+function thresholdForReason(position: Position, reason: string): DecimalValue | null {
   switch (reason) {
     case 'stop_loss':
       return position.stopLoss;
@@ -64,14 +110,14 @@ function thresholdForReason(position: Position, reason: string): number | null {
  */
 interface PositionLifecycleTracking {
   tokenMint: string;
-  observationPrice: number;
+  observationPrice: DecimalValue;
   observationTime: number;
-  signalPrice?: number;
+  signalPrice?: DecimalValue;
   signalTime?: number;
   qualificationTime?: number;
   executionTime?: number;
-  executionPrice?: number;
-  priceHistory: Array<{ timestamp: number; price: number }>;
+  executionPrice?: DecimalValue;
+  priceHistory: Array<{ timestamp: number; price: DecimalValue }>;
 }
 
 /**
@@ -81,13 +127,50 @@ interface PositionLifecycleTracking {
  * missing measurement must be distinguishable from a measured zero, because
  * these values are averaged downstream.
  */
-function pctChange(from: number | null, to: number): number | null {
-  if (from === null || !Number.isFinite(from) || from === 0) return null;
-  if (!Number.isFinite(to)) return null;
-  return +(((to - from) / from) * 100).toFixed(4);
+function pctChange(from: DecimalValue | null, to: DecimalValue): number | null {
+  if (from === null) return null;
+  try {
+    const base = parseAmount(from);
+    const target = parseAmount(to);
+    if (!base.isFinite() || base.isZero() || !target.isFinite()) return null;
+    return Number(target.minus(base).div(base).times(100).toFixed(4));
+  } catch {
+    return null;
+  }
+}
+
+function decimalString(value: Decimal): DecimalValue {
+  return value.toFixed();
+}
+
+function isPositiveDecimal(value: DecimalValue): boolean {
+  try {
+    const decimal = parseAmount(value);
+    return decimal.isFinite() && decimal.greaterThan(0);
+  } catch {
+    return false;
+  }
+}
+
+function isNonNegativeDecimal(value: DecimalValue): boolean {
+  try {
+    const decimal = parseAmount(value);
+    return decimal.isFinite() && decimal.greaterThanOrEqualTo(0);
+  } catch {
+    return false;
+  }
+}
+
+function decimalToNumberForResearch(value: DecimalValue): number {
+  return Number(parseAmount(value).toFixed(12));
 }
 
 export class MayhemEngine extends EventEmitter {
+  /** Keep event emission available under projects with incomplete Node typings. */
+  public override emit(event: string | symbol, ...args: any[]): boolean {
+    return EventEmitter.prototype.emit.call(this, event, ...args);
+  }
+
   private config: TradingConfig;
   private positionManager: PositionManager;
   private executionEngine: any;
@@ -124,12 +207,22 @@ export class MayhemEngine extends EventEmitter {
     this.logger = logger ?? consoleLogger();
     // Initialize research recorder for data collection
     // Use repo root as default if no explicit path given
-    const defaultResearchPath = path.join(process.cwd(), 'data', 'research.jsonl');
+    const runtime = globalThis as typeof globalThis & {
+      process?: {
+        cwd?: () => string;
+        env?: Record<string, string | undefined>;
+      };
+    };
+    const defaultResearchPath = path.join(
+      runtime.process?.cwd?.() ?? '.',
+      'data',
+      'research.jsonl',
+    );
     this.researchRecorder = new ResearchRecorder(
       researchRecorderOptions || {
         filePath: defaultResearchPath,
-        dryRun: process.env['DRY_RUN'] === 'true',
-        tradingEnabled: process.env['TRADING_ENABLED'] === 'true',
+        dryRun: runtime.process?.env?.['DRY_RUN'] === 'true',
+        tradingEnabled: runtime.process?.env?.['TRADING_ENABLED'] === 'true',
       },
     );
     // ensure momentumState map fresh
@@ -146,8 +239,8 @@ export class MayhemEngine extends EventEmitter {
 
   evaluateToken(
     tokenMint: string,
-    price: number,
-    liquidity: number,
+    price: DecimalValue,
+    liquidity: DecimalValue,
     riskScore: number,
     options?: {
       /**
@@ -162,18 +255,201 @@ export class MayhemEngine extends EventEmitter {
       depthMeasured?: boolean;
     },
   ): TradeSignal | null {
-    if (!this.config.entryEnabled) return null;
+    if (!this.config.entryEnabled) {
+      // Record entry rejection for research
+      if (this.researchRecorder) {
+        try {
+          this.researchRecorder.recordDecision({
+            recordId: `entry-reject:${tokenMint}:${Date.now()}`,
+            tokenMint: tokenMint,
+            mint: tokenMint,
+            decision: 'REJECT',
+            reason: 'entry_disabled',
+            priceAtDecision: price,
+            liquidityAtDecision: liquidity,
+            // Comprehensive scoring - set to null when not measured
+            momentumScore: null,
+            volumeScore: null,
+            liquidityScore: null,
+            trendScore: null,
+            flowScore: null,
+            executionScore: null,
+            overallScore: null,
+            // Risk breakdown - set to null when not measured
+            riskScore: null,
+            riskComponents: {
+              liquidityRisk: null,
+              volumeRisk: null,
+              momentumRisk: null,
+              holderRisk: null,
+              volatilityRisk: null,
+              executionRisk: null,
+            },
+            // Entry-specific data (none available for this early rejection)
+            entrySignal: null,
+            entrySignalStrength: null,
+            // Additional decision context
+            netFlowPct: null,
+            priceChangePct: null,
+            transactionVelocity: null,
+            uniqueBuyers: null,
+            uniqueSellers: null,
+            largestBuySol: null,
+            largestSellSol: null,
+            topBuyerConcentration: null,
+            buyVolumeSol: null,
+            sellVolumeSol: null,
+            buySellVolumeRatio: null,
+            curveProgressPct: null,
+            poolLiquidity: null,
+            curveDepthSol: null,
+            curveReserveSol: null,
+            buyerGrowthScore: null,
+          });
+        } catch (recordError) {
+          this.logger.warn('RESEARCH_RECORD_ENTRY_DECISION_FAILED', {
+            tokenMint: tokenMint,
+            decision: 'REJECT',
+            reason: 'entry_disabled',
+            error: recordError instanceof Error ? recordError.message : String(recordError),
+          });
+        }
+      }
+      return null;
+    }
 
     if (this.entryInFlight) {
       // Surfaced rather than silently dropped: under a burst of launches
       // this is the reason most candidates never trade, and an operator
       // tuning the bot needs to see it.
       this.logger.info('SIGNAL_SKIPPED', { tokenMint, reason: 'entry_in_flight' });
+
+      // Record entry rejection for research
+      if (this.researchRecorder) {
+        try {
+          this.researchRecorder.recordDecision({
+            recordId: `entry-reject:${tokenMint}:${Date.now()}`,
+            tokenMint: tokenMint,
+            mint: tokenMint,
+            decision: 'REJECT',
+            reason: 'entry_in_flight',
+            priceAtDecision: price,
+            liquidityAtDecision: liquidity,
+            // Comprehensive scoring - set to null when not measured
+            momentumScore: null,
+            volumeScore: null,
+            liquidityScore: null,
+            trendScore: null,
+            flowScore: null,
+            executionScore: null,
+            overallScore: null,
+            // Risk breakdown - set to null when not measured
+            riskScore: null,
+            riskComponents: {
+              liquidityRisk: null,
+              volumeRisk: null,
+              momentumRisk: null,
+              holderRisk: null,
+              volatilityRisk: null,
+              executionRisk: null,
+            },
+            // Entry-specific data (none available for this early rejection)
+            entrySignal: null,
+            entrySignalStrength: null,
+            // Additional decision context
+            netFlowPct: null,
+            priceChangePct: null,
+            transactionVelocity: null,
+            uniqueBuyers: null,
+            uniqueSellers: null,
+            largestBuySol: null,
+            largestSellSol: null,
+            topBuyerConcentration: null,
+            buyVolumeSol: null,
+            sellVolumeSol: null,
+            buySellVolumeRatio: null,
+            curveProgressPct: null,
+            poolLiquidity: null,
+            curveDepthSol: null,
+            curveReserveSol: null,
+            buyerGrowthScore: null,
+          });
+        } catch (recordError) {
+          this.logger.warn('RESEARCH_RECORD_ENTRY_DECISION_FAILED', {
+            tokenMint: tokenMint,
+            decision: 'REJECT',
+            reason: 'entry_in_flight',
+            error: recordError instanceof Error ? recordError.message : String(recordError),
+          });
+        }
+      }
+
       return null;
     }
 
     if (!this.positionManager.canOpenPosition()) {
       this.logger.info('SIGNAL_SKIPPED', { tokenMint, reason: 'max_open_positions' });
+
+      // Record entry rejection for research
+      if (this.researchRecorder) {
+        try {
+          this.researchRecorder.recordDecision({
+            recordId: `entry-reject:${tokenMint}:${Date.now()}`,
+            tokenMint: tokenMint,
+            mint: tokenMint,
+            decision: 'REJECT',
+            reason: 'max_open_positions',
+            priceAtDecision: price,
+            liquidityAtDecision: liquidity,
+            // Comprehensive scoring - set to null when not measured
+            momentumScore: null,
+            volumeScore: null,
+            liquidityScore: null,
+            trendScore: null,
+            flowScore: null,
+            executionScore: null,
+            overallScore: null,
+            // Risk breakdown - set to null when not measured
+            riskScore: null,
+            riskComponents: {
+              liquidityRisk: null,
+              volumeRisk: null,
+              momentumRisk: null,
+              holderRisk: null,
+              volatilityRisk: null,
+              executionRisk: null,
+            },
+            // Entry-specific data (none available for this early rejection)
+            entrySignal: null,
+            entrySignalStrength: null,
+            // Additional decision context
+            netFlowPct: null,
+            priceChangePct: null,
+            transactionVelocity: null,
+            uniqueBuyers: null,
+            uniqueSellers: null,
+            largestBuySol: null,
+            largestSellSol: null,
+            topBuyerConcentration: null,
+            buyVolumeSol: null,
+            sellVolumeSol: null,
+            buySellVolumeRatio: null,
+            curveProgressPct: null,
+            poolLiquidity: null,
+            curveDepthSol: null,
+            curveReserveSol: null,
+            buyerGrowthScore: null,
+          });
+        } catch (recordError) {
+          this.logger.warn('RESEARCH_RECORD_ENTRY_DECISION_FAILED', {
+            tokenMint: tokenMint,
+            decision: 'REJECT',
+            reason: 'max_open_positions',
+            error: recordError instanceof Error ? recordError.message : String(recordError),
+          });
+        }
+      }
+
       return null;
     }
 
@@ -184,11 +460,150 @@ export class MayhemEngine extends EventEmitter {
         riskScore,
         minRiskScore: this.config.minRiskScore,
       });
+
+      // Record entry rejection for research
+      if (this.researchRecorder) {
+        try {
+          this.researchRecorder.recordDecision({
+            recordId: `entry-reject:${tokenMint}:${Date.now()}`,
+            tokenMint: tokenMint,
+            mint: tokenMint,
+            decision: 'REJECT',
+            reason: 'risk_score_below_minimum',
+            priceAtDecision: price,
+            liquidityAtDecision: liquidity,
+            // Risk score is known for this rejection
+            riskScore: riskScore,
+            // Risk breakdown - set to null when not measured
+            riskComponents: {
+              liquidityRisk: null,
+              volumeRisk: null,
+              momentumRisk: null,
+              holderRisk: null,
+              volatilityRisk: null,
+              executionRisk: null,
+            },
+            // Other scoring - set to null when not measured
+            momentumScore: null,
+            volumeScore: null,
+            liquidityScore: null,
+            trendScore: null,
+            flowScore: null,
+            executionScore: null,
+            overallScore: null,
+            // Entry-specific data (none available for this early rejection)
+            entrySignal: null,
+            entrySignalStrength: null,
+            // Additional decision context
+            netFlowPct: null,
+            priceChangePct: null,
+            transactionVelocity: null,
+            uniqueBuyers: null,
+            uniqueSellers: null,
+            largestBuySol: null,
+            largestSellSol: null,
+            topBuyerConcentration: null,
+            buyVolumeSol: null,
+            sellVolumeSol: null,
+            buySellVolumeRatio: null,
+            curveProgressPct: null,
+            poolLiquidity: null,
+            curveDepthSol: null,
+            curveReserveSol: null,
+            buyerGrowthScore: null,
+          });
+        } catch (recordError) {
+          this.logger.warn('RESEARCH_RECORD_ENTRY_DECISION_FAILED', {
+            tokenMint: tokenMint,
+            decision: 'REJECT',
+            reason: 'risk_score_below_minimum',
+            error: recordError instanceof Error ? recordError.message : String(recordError),
+          });
+        }
+      }
+
       return null;
     }
 
-    if (!Number.isFinite(price) || price <= 0) {
+    if (!isPositiveDecimal(price)) {
       this.logger.warn('SIGNAL_SKIPPED', { tokenMint, reason: 'invalid_price', price });
+
+      // Record entry rejection for research
+      if (this.researchRecorder) {
+        try {
+          this.researchRecorder.recordDecision({
+            recordId: `entry-reject:${tokenMint}:${Date.now()}`,
+            tokenMint: tokenMint,
+            mint: tokenMint,
+            decision: 'REJECT',
+            reason: 'invalid_price',
+            priceAtDecision: price,
+            liquidityAtDecision: liquidity,
+            // Comprehensive scoring - set to null when not measured
+            momentumScore: null,
+            volumeScore: null,
+            liquidityScore: null,
+            trendScore: null,
+            flowScore: null,
+            executionScore: null,
+            overallScore: null,
+            // Risk breakdown - set to null when not measured
+            riskScore: null,
+            riskComponents: {
+              liquidityRisk: null,
+              volumeRisk: null,
+              momentumRisk: null,
+              holderRisk: null,
+              volatilityRisk: null,
+              executionRisk: null,
+            },
+            // Entry-specific data (none available for this early rejection)
+            entrySignal: null,
+            entrySignalStrength: null,
+            // Additional decision context
+            netFlowPct: null,
+            priceChangePct: null,
+            transactionVelocity: null,
+            uniqueBuyers: null,
+            uniqueSellers: null,
+            largestBuySol: null,
+            largestSellSol: null,
+            topBuyerConcentration: null,
+            buyVolumeSol: null,
+            sellVolumeSol: null,
+            buySellVolumeRatio: null,
+            curveProgressPct: null,
+            poolLiquidity: null,
+            curveDepthSol: null,
+            curveReserveSol: null,
+            buyerGrowthScore: null,
+          });
+        } catch (recordError) {
+          this.logger.warn('RESEARCH_RECORD_ENTRY_DECISION_FAILED', {
+            tokenMint: tokenMint,
+            decision: 'REJECT',
+            reason: 'invalid_price',
+            error: recordError instanceof Error ? recordError.message : String(recordError),
+          });
+        }
+      }
+
+      return null;
+    }
+
+    if (
+      !Number.isFinite(this.config.maxPositionSol) ||
+      this.config.maxPositionSol <= 0 ||
+      !Number.isFinite(this.config.maxLiquidityParticipationBps) ||
+      this.config.maxLiquidityParticipationBps <= 0 ||
+      this.config.maxLiquidityParticipationBps > 10_000
+    ) {
+      this.logger.error('SIGNAL_SKIPPED', {
+        tokenMint,
+        reason: 'invalid_entry_sizing_config',
+        maxPositionSol: this.config.maxPositionSol,
+        maxLiquidityParticipationBps: this.config.maxLiquidityParticipationBps,
+      });
       return null;
     }
 
@@ -211,21 +626,143 @@ export class MayhemEngine extends EventEmitter {
     // and is still rejected here.
     const depthMeasured = options?.depthMeasured === true;
 
-    if (!Number.isFinite(liquidity) || liquidity < 0) {
+    if (!isNonNegativeDecimal(liquidity)) {
       this.logger.warn('SIGNAL_SKIPPED', {
         tokenMint,
         reason: 'liquidity_invalid',
         liquidity,
       });
+
+      // Record entry rejection for research
+      if (this.researchRecorder) {
+        try {
+          this.researchRecorder.recordDecision({
+            recordId: `entry-reject:${tokenMint}:${Date.now()}`,
+            tokenMint: tokenMint,
+            mint: tokenMint,
+            decision: 'REJECT',
+            reason: 'liquidity_invalid',
+            priceAtDecision: price,
+            liquidityAtDecision: liquidity,
+            // Comprehensive scoring - set to null when not measured
+            momentumScore: null,
+            volumeScore: null,
+            liquidityScore: null,
+            trendScore: null,
+            flowScore: null,
+            executionScore: null,
+            overallScore: null,
+            // Risk breakdown - set to null when not measured
+            riskScore: null,
+            riskComponents: {
+              liquidityRisk: null,
+              volumeRisk: null,
+              momentumRisk: null,
+              holderRisk: null,
+              volatilityRisk: null,
+              executionRisk: null,
+            },
+            // Entry-specific data (none available for this early rejection)
+            entrySignal: null,
+            entrySignalStrength: null,
+            // Additional decision context
+            netFlowPct: null,
+            priceChangePct: null,
+            transactionVelocity: null,
+            uniqueBuyers: null,
+            uniqueSellers: null,
+            largestBuySol: null,
+            largestSellSol: null,
+            topBuyerConcentration: null,
+            buyVolumeSol: null,
+            sellVolumeSol: null,
+            buySellVolumeRatio: null,
+            curveProgressPct: null,
+            poolLiquidity: null,
+            curveDepthSol: null,
+            curveReserveSol: null,
+            buyerGrowthScore: null,
+          });
+        } catch (recordError) {
+          this.logger.warn('RESEARCH_RECORD_ENTRY_DECISION_FAILED', {
+            tokenMint: tokenMint,
+            decision: 'REJECT',
+            reason: 'liquidity_invalid',
+            error: recordError instanceof Error ? recordError.message : String(recordError),
+          });
+        }
+      }
+
       return null;
     }
 
-    if (liquidity <= 0 && !depthMeasured) {
+    if (parseAmount(liquidity).lessThanOrEqualTo(0) && !depthMeasured) {
       this.logger.warn('SIGNAL_SKIPPED', {
         tokenMint,
         reason: 'liquidity_unknown',
         liquidity,
       });
+
+      // Record entry rejection for research
+      if (this.researchRecorder) {
+        try {
+          this.researchRecorder.recordDecision({
+            recordId: `entry-reject:${tokenMint}:${Date.now()}`,
+            tokenMint: tokenMint,
+            mint: tokenMint,
+            decision: 'REJECT',
+            reason: 'liquidity_unknown',
+            priceAtDecision: price,
+            liquidityAtDecision: liquidity,
+            // Comprehensive scoring - set to null when not measured
+            momentumScore: null,
+            volumeScore: null,
+            liquidityScore: null,
+            trendScore: null,
+            flowScore: null,
+            executionScore: null,
+            overallScore: null,
+            // Risk breakdown - set to null when not measured
+            riskScore: null,
+            riskComponents: {
+              liquidityRisk: null,
+              volumeRisk: null,
+              momentumRisk: null,
+              holderRisk: null,
+              volatilityRisk: null,
+              executionRisk: null,
+            },
+            // Entry-specific data (none available for this early rejection)
+            entrySignal: null,
+            entrySignalStrength: null,
+            // Additional decision context
+            netFlowPct: null,
+            priceChangePct: null,
+            transactionVelocity: null,
+            uniqueBuyers: null,
+            uniqueSellers: null,
+            largestBuySol: null,
+            largestSellSol: null,
+            topBuyerConcentration: null,
+            buyVolumeSol: null,
+            sellVolumeSol: null,
+            buySellVolumeRatio: null,
+            curveProgressPct: null,
+            poolLiquidity: null,
+            curveDepthSol: null,
+            curveReserveSol: null,
+            buyerGrowthScore: null,
+          });
+        } catch (recordError) {
+          this.logger.warn('RESEARCH_RECORD_ENTRY_DECISION_FAILED', {
+            tokenMint: tokenMint,
+            decision: 'REJECT',
+            reason: 'liquidity_unknown',
+            error: recordError instanceof Error ? recordError.message : String(recordError),
+          });
+        }
+      }
+
       return null;
     }
 
@@ -250,31 +787,96 @@ export class MayhemEngine extends EventEmitter {
      * This is an accepted, operator-approved tradeoff for launch entry — it
      * is not a bug, and it must not be quietly extended to any other venue.
      */
-    let amount: number;
-    let sizingBasis: 'depth_participation' | 'fixed_first_buy';
+    /*
+     * Deterministic dynamic sizing.
+     *
+     * The position-sizing engine is now the single authority for the
+     * calculated entry amount. The existing liquidity participation cap
+     * remains a hard upper bound and is passed through as the effective
+     * maximum position.
+     *
+     * IMPORTANT:
+     * - Momentum can reduce/increase the calculated size only through its
+     *   normalized factor.
+     * - Momentum never bypasses execution quality.
+     * - Liquidity participation remains a hard cap.
+     * - maxPositionSol remains an absolute hard cap.
+     */
 
-    if (liquidity > 0) {
-      const participationCap =
-        liquidity * (this.config.maxLiquidityParticipationBps / 10_000);
-      amount = Math.min(this.config.maxPositionSol, participationCap);
-      sizingBasis = 'depth_participation';
-    } else {
-      amount = this.config.maxPositionSol;
-      sizingBasis = 'fixed_first_buy';
+    const participationCap =
+      parseAmount(liquidity).greaterThan(0)
+        ? decimalString(parseAmount(liquidity).times(this.config.maxLiquidityParticipationBps).div(10_000))
+        : this.config.maxPositionSol.toString();
 
-      this.logger.warn('SIZING_FIXED_FIRST_BUY', {
+    const effectiveMaximumPositionSol = decimalString(Decimal.min(
+      new Decimal(this.config.maxPositionSol),
+      parseAmount(participationCap),
+    ));
+
+    const sizing = calculatePositionSize({
+      baseRiskBudgetSol: this.config.maxPositionSol.toString(),
+
+      /*
+       * These values are normalized safety factors. Risk score remains a
+       * sizing factor for positive-depth venues; measured zero-depth launch
+       * entries use the documented fixed first-buy budget.
+       */
+      // A successfully measured zero-depth bonding curve uses the documented
+      // fixed first-buy budget. Risk and portfolio gates have already passed;
+      // do not multiply that fixed budget by the score a second time.
+      confidenceMultiplier:
+        depthMeasured && parseAmount(liquidity).lessThanOrEqualTo(0)
+          ? 1
+          : Math.max(0, Math.min(1, riskScore / 100)),
+      liquidityFactor:
+        parseAmount(liquidity).greaterThan(0)
+          ? Math.max(0, Math.min(1, decimalToNumberForResearch(decimalString(parseAmount(liquidity).div(3)))))
+          : depthMeasured
+            ? 1
+            : 0,
+      momentumFactor: 1,
+      executionQualityFactor: 1,
+
+      minimumPositionSol: '0',
+      maximumPositionSol: effectiveMaximumPositionSol,
+
+      /*
+       * The engine's existing exposure/risk governors remain authoritative.
+       * This stage only adds deterministic sizing.
+       */
+      remainingExposureSol: this.config.maxPositionSol.toString(),
+      maximumExposureSol: this.config.maxPositionSol.toString(),
+    });
+
+    const amount = sizing.approvedSizeSol;
+
+    const sizingBasis: 'depth_participation' | 'fixed_first_buy' =
+      parseAmount(liquidity).greaterThan(0)
+        ? 'depth_participation'
+        : 'fixed_first_buy';
+
+    if (!sizing.approved || !isPositiveDecimal(amount)) {
+      this.logger.info('SIGNAL_SKIPPED', {
         tokenMint,
-        amount,
-        note:
-          'curve depth measured at zero; sized on the absolute risk budget. ' +
-          'Participation-based exit-impact bounding does not apply to this entry.',
+        reason: sizing.rejectionReason ?? 'zero_size_after_caps',
+        sizing,
       });
-    }
-
-    if (!Number.isFinite(amount) || amount <= 0) {
-      this.logger.info('SIGNAL_SKIPPED', { tokenMint, reason: 'zero_size_after_caps' });
       return null;
     }
+
+    this.logger.info('POSITION_SIZE_CALCULATED', {
+      tokenMint,
+      amount,
+      rawSizeSol: sizing.rawSizeSol,
+      approvedSizeSol: sizing.approvedSizeSol,
+      confidenceMultiplier: sizing.confidenceMultiplier,
+      liquidityFactor: sizing.liquidityFactor,
+      momentumFactor: sizing.momentumFactor,
+      executionQualityFactor: sizing.executionQualityFactor,
+      sizingBasis,
+      participationCap,
+      maximumPositionSol: this.config.maxPositionSol,
+    });
 
     const signal: TradeSignal = {
       tokenMint,
@@ -308,7 +910,71 @@ export class MayhemEngine extends EventEmitter {
       tracking.signalTime = now;
     }
 
-    this.emit('signal', signal);
+    // Call the inherited emitter explicitly so this remains compatible with
+    // runtimes whose EventEmitter type does not expose `emit` on subclasses.
+    EventEmitter.prototype.emit.call(this, 'signal', signal);
+
+    // Record BUY decision for research
+    if (this.researchRecorder) {
+      try {
+        this.researchRecorder.recordDecision({
+          recordId: `entry-buy:${tokenMint}:${Date.now()}`,
+          tokenMint: tokenMint,
+          mint: tokenMint,
+          decision: 'BUY',
+          reason: `Risk score ${riskScore}, liquidity ${liquidity}, sizing ${sizingBasis}`,
+          priceAtDecision: price,
+          liquidityAtDecision: liquidity,
+          // Risk score is known for this decision
+          riskScore: riskScore,
+          // Other scoring - set to null when not measured (would need actual data sources)
+          momentumScore: null,
+          volumeScore: null,
+          liquidityScore: null,
+          trendScore: null,
+          flowScore: null,
+          executionScore: null,
+          overallScore: null,
+          // Risk breakdown - set to null when not measured
+          riskComponents: {
+            liquidityRisk: null,
+            volumeRisk: null,
+            momentumRisk: null,
+            holderRisk: null,
+            volatilityRisk: null,
+            executionRisk: null,
+          },
+          // Entry-specific data
+          entrySignal: signal.reason, // The reason field contains our decision rationale
+          entrySignalStrength: null, // Would need actual signal strength measurement
+          // Additional decision context (would need actual data sources)
+          netFlowPct: null,
+          priceChangePct: null,
+          transactionVelocity: null,
+          uniqueBuyers: null,
+          uniqueSellers: null,
+          largestBuySol: null,
+          largestSellSol: null,
+          topBuyerConcentration: null,
+          buyVolumeSol: null,
+          sellVolumeSol: null,
+          buySellVolumeRatio: null,
+          curveProgressPct: null,
+          poolLiquidity: null,
+          curveDepthSol: null,
+          curveReserveSol: null,
+          buyerGrowthScore: null,
+        });
+      } catch (recordError) {
+        this.logger.warn('RESEARCH_RECORD_ENTRY_DECISION_FAILED', {
+          tokenMint: tokenMint,
+          decision: 'BUY',
+          reason: `Risk score ${riskScore}, liquidity ${liquidity}, sizing ${sizingBasis}`,
+          error: recordError instanceof Error ? recordError.message : String(recordError),
+        });
+      }
+    }
+
     return signal;
   }
 
@@ -355,9 +1021,8 @@ export class MayhemEngine extends EventEmitter {
 
       const quotedPriceRaw = quote?.pricePerToken;
       const quotedPrice =
-        typeof quotedPriceRaw === 'number' &&
-        Number.isFinite(quotedPriceRaw) &&
-        quotedPriceRaw > 0
+        typeof quotedPriceRaw === 'string' &&
+        isPositiveDecimal(quotedPriceRaw)
           ? quotedPriceRaw
           : signal.price;
 
@@ -407,7 +1072,7 @@ export class MayhemEngine extends EventEmitter {
         // a pending transaction may still land. Emit so the operator can
         // reconcile rather than assuming the capital was never committed.
         if (isUnresolved(result)) {
-          this.emit('unreconciled', {
+          EventEmitter.prototype.emit.call(this, 'unreconciled', {
             kind: 'entry',
             mint: signal.tokenMint,
             signature: result?.signature,
@@ -417,23 +1082,41 @@ export class MayhemEngine extends EventEmitter {
         return null;
       }
 
+      if (
+        result.filledInputAmount !== undefined &&
+        (!isPositiveDecimal(result.filledInputAmount) ||
+          parseAmount(result.filledInputAmount).greaterThan(parseAmount(signal.amount).times('1.000000001')))
+      ) {
+        throw new Error(
+          `Invalid confirmed entry fill amount: ${result.filledInputAmount}`,
+        );
+      }
+      if (
+        result.filledOutputAmount !== undefined &&
+        !isPositiveDecimal(result.filledOutputAmount)
+      ) {
+        throw new Error(
+          `Invalid confirmed entry output amount: ${result.filledOutputAmount}`,
+        );
+      }
+
       const entryTx = result.signature;
-      const entryFees = result.fees ?? 0;
+      const entryFees = String(result.fees ?? 0);
 
       // Prefer the amounts the chain actually executed. Fall back to the
       // quote only when the venue cannot report fills, and say so loudly —
       // silent substitution is how quote-based P&L drift creeps back in.
-      let quantity: number;
-      let actualPrice: number;
+      let quantity: DecimalValue;
+      let actualPrice: DecimalValue;
 
       if (
-        typeof result.filledOutputAmount === 'number' &&
-        result.filledOutputAmount > 0 &&
-        typeof result.filledInputAmount === 'number' &&
-        result.filledInputAmount > 0
+        typeof result.filledOutputAmount === 'string' &&
+        isPositiveDecimal(result.filledOutputAmount) &&
+        typeof result.filledInputAmount === 'string' &&
+        isPositiveDecimal(result.filledInputAmount)
       ) {
         quantity = result.filledOutputAmount;
-        actualPrice = result.filledInputAmount / result.filledOutputAmount;
+        actualPrice = decimalString(parseAmount(result.filledInputAmount).div(parseAmount(result.filledOutputAmount)));
       } else {
         this.logger.warn('ENTRY_FILL_AMOUNTS_UNAVAILABLE', {
           mint: signal.tokenMint,
@@ -441,13 +1124,13 @@ export class MayhemEngine extends EventEmitter {
           note: 'falling back to quote pricing; P&L for this position is an estimate',
         });
         actualPrice = quotedPrice;
-        quantity = signal.amount / actualPrice;
+        quantity = decimalString(parseAmount(signal.amount).div(parseAmount(actualPrice)));
       }
 
-      if (!Number.isFinite(actualPrice) || actualPrice <= 0) {
+      if (!isPositiveDecimal(actualPrice)) {
         throw new Error(`Invalid entry price: ${actualPrice}`);
       }
-      if (!Number.isFinite(quantity) || quantity <= 0) {
+      if (!isPositiveDecimal(quantity)) {
         throw new Error(`Invalid entry quantity: ${quantity}`);
       }
 
@@ -470,8 +1153,8 @@ export class MayhemEngine extends EventEmitter {
           executedAmount: quantity,
           requestedPrice: signal.price,
           executedPrice: actualPrice,
-          slippageBps: Math.round(((actualPrice - signal.price) / signal.price) * 10000),
-          slippagePercent: Number((((actualPrice - signal.price) / signal.price) * 100).toFixed(4)),
+          slippageBps: Number(parseAmount(actualPrice).minus(parseAmount(signal.price)).div(parseAmount(signal.price)).times(10000).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toFixed(0)),
+          slippagePercent: pctChange(signal.price, actualPrice),
           fees: entryFees,
           quotedPrice,
           timestamp: new Date().toISOString(),
@@ -504,7 +1187,8 @@ export class MayhemEngine extends EventEmitter {
         entryTx,
         actualPrice,
         entryFees,
-        signal.entryLiquidity,
+        signal
+        .entryLiquidity,
       );
 
       // Link position to its lifecycle tracking for later reference
@@ -563,19 +1247,20 @@ export class MayhemEngine extends EventEmitter {
     const priced = await Promise.all(
       openPositions.map(async (position) => {
         if (position.status === 'exiting') {
-          return { position, price: null as number | null, error: null as unknown };
+          return { position, price: null as DecimalValue | null, error: null as unknown };
         }
         try {
           if (
             this.executionEngine &&
             typeof this.executionEngine.getPrice === 'function'
           ) {
-            const price = await this.executionEngine.getPrice(position.tokenMint);
+            const rawPrice = await this.executionEngine.getPrice(position.tokenMint);
+            const price = typeof rawPrice === 'string' ? rawPrice : String(rawPrice);
             return { position, price, error: null as unknown };
           }
-          return { position, price: null as number | null, error: null as unknown };
+          return { position, price: null as DecimalValue | null, error: null as unknown };
         } catch (error) {
-          return { position, price: null as number | null, error };
+          return { position, price: null as DecimalValue | null, error };
         }
       }),
     );
@@ -597,7 +1282,7 @@ export class MayhemEngine extends EventEmitter {
           });
         }
 
-        if (price === null || !Number.isFinite(price) || price <= 0) {
+        if (price === null || !isPositiveDecimal(price)) {
           // No fresh price this tick. Fall back to the last known one ONLY
           // while it is still within tolerance. Beyond that, refusing to
           // act on a frozen price is the whole point: a feed that dies and
@@ -632,7 +1317,77 @@ export class MayhemEngine extends EventEmitter {
             const triggered = conditions.filter((c) => c.triggered);
             if (triggered.length > 0) {
               const top = this.highestPriorityExit(triggered);
-              if (top) await this.executeExit(position.id, top.type);
+              if (top) {
+                // Record exit decision for research
+                if (
+                  this.researchRecorder
+                ) {
+                  try {
+                    // Get current liquidity if available (this would need to be implemented based on available data sources)
+                    const currentLiquidity = null; // Placeholder - would need to be replaced with actual current liquidity measurement
+
+                    this.researchRecorder.recordDecision({
+                      recordId: `exit-decision:${position.id}:${now}`,
+                      tokenMint: position.tokenMint,
+                      mint: position.tokenMint,
+                      positionId: position.id,
+                      decision: 'EXIT',
+                      reason: `Exit triggered by ${top.type}`,
+                      // Context at decision time
+                      priceAtDecision: position.currentPrice,
+                      liquidityAtDecision: currentLiquidity,
+                      volumeAtDecision: null, // Would need actual volume data source
+                      holderCountAtDecision: null, // Would need actual holder data source
+                      // Comprehensive scoring - set to null when not measured
+                      momentumScore: null,
+                      volumeScore: null,
+                      liquidityScore: null,
+                      trendScore: null,
+                      flowScore: null,
+                      executionScore: null,
+                      overallScore: null,
+                      // Risk breakdown - set to null when not measured
+                      riskScore: null,
+                      riskComponents: {
+                        liquidityRisk: null,
+                        volumeRisk: null,
+                        momentumRisk: null,
+                        holderRisk: null,
+                        volatilityRisk: null,
+                        executionRisk: null,
+                      },
+                      // Exit-specific data
+                      exitReason: top.type,
+                      stopLossThreshold: position.stopLoss,
+                      takeProfitThreshold: position.takeProfit,
+                      trailingStopThreshold: position.trailingStop,
+                      maxHoldThresholdMs: this.config.maxHoldSeconds * 1000,
+                      // Configuration snapshot
+                      config: {
+                        dryRun: process.env['DRY_RUN'] === 'true',
+                        tradingEnabled: process.env['TRADING_ENABLED'] === 'true',
+                        maxHoldSeconds: this.config.maxHoldSeconds,
+                        stopLossPercent: this.config.stopLossPercent,
+                        takeProfitPercent: this.config.takeProfitPercent,
+                        trailingStopPercent: this.config.trailingStopPercent,
+                        maxLiquidityParticipationBps: this.config.maxLiquidityParticipationBps,
+                        minRiskScore: this.config.minRiskScore,
+                        maxQuoteAgeMs: this.config.maxQuoteAgeMs,
+                        maxSellPriceImpactPercent: this.config.maxSellPriceImpactPercent,
+                        maxEntryPriceImpactBps: Number(process.env['MAX_ENTRY_PRICE_IMPACT_BPS'] ?? '750'),
+                      }
+                    });
+                  } catch (exitDecisionError) {
+                    this.logger.warn('RESEARCH_RECORD_EXIT_DECISION_FAILED', {
+                      positionId: position.id,
+                      tokenMint: position.tokenMint,
+                      error: exitDecisionError instanceof Error ? exitDecisionError.message : String(exitDecisionError),
+                    });
+                  }
+                }
+
+                await this.executeExit(position.id, top.type);
+              }
             }
             continue;
           }
@@ -688,13 +1443,79 @@ export class MayhemEngine extends EventEmitter {
             }
           }
 
+          // Record position observation for research
+          if (
+            process.env['RESEARCH_RECORD_SAMPLES'] === 'true' &&
+            this.researchRecorder &&
+            position.tokenMint
+          ) {
+            try {
+              // Get current liquidity if available (this would need to be implemented based on available data sources)
+              const currentLiquidity = null; // Placeholder - would need to be replaced with actual current liquidity measurement
+
+              this.researchRecorder.recordObservation({
+                event: 'POSITION_OBSERVATION',
+                tokenMint: position.tokenMint,
+                mint: position.tokenMint,
+                positionId: position.id,
+                timestamp: now,
+                // Position state at observation time
+                entryPrice: position.actualEntryPrice,
+                currentPrice: price,
+                peakPrice: position.peakPrice,
+                troughPrice: position.troughPrice,
+                unrealizedPnl: position.unrealizedPnl,
+                unrealizedPnlPercent: parseAmount(position.entryNotional).greaterThan(0)
+                  ? Number(
+                      parseAmount(position.unrealizedPnl)
+                        .div(parseAmount(position.entryNotional))
+                        .times(100)
+                        .toFixed(4),
+                    )
+                  : null,
+                elapsedTimeMs: now - position.entryTime.getTime(),
+                // Excursion metrics
+                mfePct: position.mfePct,
+                maePct: position.maePct,
+                // Liquidity - record both entry and current liquidity when available
+                entryLiquidity: position.entryLiquidity,
+                currentLiquidity: currentLiquidity,
+                // Thresholds
+                stopLossThreshold: position.stopLoss,
+                takeProfitThreshold: position.takeProfit,
+                trailingStopThreshold: position.trailingStop,
+                // Config snapshot
+                config: {
+                  dryRun: process.env['DRY_RUN'] === 'true',
+                  tradingEnabled: process.env['TRADING_ENABLED'] === 'true',
+                  maxHoldSeconds: this.config.maxHoldSeconds,
+                  stopLossPercent: this.config.stopLossPercent,
+                  takeProfitPercent: this.config.takeProfitPercent,
+                  trailingStopPercent: this.config.trailingStopPercent,
+                  maxLiquidityParticipationBps: this.config.maxLiquidityParticipationBps,
+                  minRiskScore: this.config.minRiskScore,
+                  maxQuoteAgeMs: this.config.maxQuoteAgeMs,
+                  maxSellPriceImpactPercent: this.config.maxSellPriceImpactPercent,
+                  maxEntryPriceImpactBps: Number(process.env['MAX_ENTRY_PRICE_IMPACT_BPS'] ?? '750'),
+                }
+              });
+            } catch (obsError) {
+              // Research recording errors must never interrupt position monitoring
+              this.logger.warn('RESEARCH_RECORD_OBSERVATION_FAILED', {
+                positionId: position.id,
+                tokenMint: position.tokenMint,
+                error: obsError instanceof Error ? obsError.message : String(obsError),
+              });
+            }
+          }
+
           // Momentum-based exit confirmation: sample on a cadence and require
           // consecutive confirmatory samples before executing a momentum exit.
           try {
             const momentumConfirmed = await this.checkMomentumConfirmation(position);
             if (momentumConfirmed) {
               this.log('info', 'EXIT_MOMENTUM_CONFIRMED', { positionId: position.id });
-              await this.executeExit(position.id, 'volatility_exit');
+              await this.executeExit(position.id, 'momentum_volume_reversal');
               continue;
             }
           } catch (err) {
@@ -713,10 +1534,83 @@ export class MayhemEngine extends EventEmitter {
         // rate-limiting the calls that actually matter.
         if (
           topExit.type === 'take_profit' &&
-          position.takeProfitDeferredUntil !== null &&
-          now < position.takeProfitDeferredUntil
+          position.takeProfitDeferredUntil !== null
         ) {
-          continue;
+          if (now < position.takeProfitDeferredUntil) {
+            continue;
+          }
+
+          // Deferral expired. Clear stale state so the position is
+          // immediately eligible for normal TP evaluation.
+          position.takeProfitDeferredUntil = null;
+        }
+
+        // Record exit decision for research
+        if (
+          this.researchRecorder
+        ) {
+          try {
+            // Get current liquidity if available (this would need to be implemented based on available data sources)
+            const currentLiquidity = null; // Placeholder - would need to be replaced with actual current liquidity measurement
+
+            this.researchRecorder.recordDecision({
+              recordId: `exit-decision:${position.id}:${now}`,
+              tokenMint: position.tokenMint,
+              mint: position.tokenMint,
+              positionId: position.id,
+              decision: 'EXIT',
+              reason: `Exit triggered by ${topExit.type}`,
+              // Context at decision time
+              priceAtDecision: price,
+              liquidityAtDecision: currentLiquidity,
+              volumeAtDecision: null, // Would need actual volume data source
+              holderCountAtDecision: null, // Would need actual holder data source
+              // Comprehensive scoring - set to null when not measured
+              momentumScore: null,
+              volumeScore: null,
+              liquidityScore: null,
+              trendScore: null,
+              flowScore: null,
+              executionScore: null,
+              overallScore: null,
+              // Risk breakdown - set to null when not measured
+              riskScore: null,
+              riskComponents: {
+                liquidityRisk: null,
+                volumeRisk: null,
+                momentumRisk: null,
+                holderRisk: null,
+                volatilityRisk: null,
+                executionRisk: null,
+              },
+              // Exit-specific data
+              exitReason: topExit.type,
+              stopLossThreshold: position.stopLoss,
+              takeProfitThreshold: position.takeProfit,
+              trailingStopThreshold: position.trailingStop,
+              maxHoldThresholdMs: this.config.maxHoldSeconds * 1000,
+              // Configuration snapshot
+              config: {
+                dryRun: process.env['DRY_RUN'] === 'true',
+                tradingEnabled: process.env['TRADING_ENABLED'] === 'true',
+                maxHoldSeconds: this.config.maxHoldSeconds,
+                stopLossPercent: this.config.stopLossPercent,
+                takeProfitPercent: this.config.takeProfitPercent,
+                trailingStopPercent: this.config.trailingStopPercent,
+                maxLiquidityParticipationBps: this.config.maxLiquidityParticipationBps,
+                minRiskScore: this.config.minRiskScore,
+                maxQuoteAgeMs: this.config.maxQuoteAgeMs,
+                maxSellPriceImpactPercent: this.config.maxSellPriceImpactPercent,
+                maxEntryPriceImpactBps: Number(process.env['MAX_ENTRY_PRICE_IMPACT_BPS'] ?? '750'),
+              }
+            });
+          } catch (exitDecisionError) {
+            this.logger.warn('RESEARCH_RECORD_EXIT_DECISION_FAILED', {
+              positionId: position.id,
+              tokenMint: position.tokenMint,
+              error: exitDecisionError instanceof Error ? exitDecisionError.message : String(exitDecisionError),
+            });
+          }
         }
 
         await this.executeExit(position.id, topExit.type);
@@ -813,7 +1707,7 @@ export class MayhemEngine extends EventEmitter {
           sellQuotePrice: sellQuote.pricePerToken,
           grossProceeds: netPnl.grossProceeds,
           netProceeds: netPnl.netProceeds,
-          netPnlPercent: +netPnl.netPnlPercent.toFixed(2),
+          netPnlPercent: Number(parseAmount(netPnl.netPnlPercent).toFixed(2)),
           priceImpactPercent: sellQuote.priceImpactPct,
           quoteAgeMs: netPnl.quoteAgeMs,
           attempt,
@@ -856,7 +1750,7 @@ export class MayhemEngine extends EventEmitter {
           });
           this.positionManager.recordExitAttempt(
             position.id,
-            `Price impact ${sellQuote.priceImpactPct.toFixed(1)}% exceeds max`,
+            `Price impact ${parseAmount(sellQuote.priceImpactPct).toFixed(1)}% exceeds max`,
             sellQuote.pricePerToken,
           );
           if (attempt < maxAttempts) {
@@ -869,15 +1763,12 @@ export class MayhemEngine extends EventEmitter {
 
         // TP gate: require NET executable P&L to meet threshold
         if (reason === 'take_profit') {
-          if (netPnl.netPnlPercent < this.config.takeProfitPercent) {
+          if (parseAmount(netPnl.netPnlPercent).lessThan(this.config.takeProfitPercent)) {
             this.log('info', 'EXIT_DECISION', {
               positionId: position.id,
               decision: 'SKIP_TP_NOT_MET_NET',
-              chartPnlPercent: +(
-                ((position.currentPrice - position.actualEntryPrice) /
-                  position.actualEntryPrice) * 100
-              ).toFixed(2),
-              netPnlPercent: +netPnl.netPnlPercent.toFixed(2),
+              chartPnlPercent: Number(parseAmount(position.currentPrice).minus(parseAmount(position.actualEntryPrice)).div(parseAmount(position.actualEntryPrice)).times(100).toFixed(2)),
+              netPnlPercent: Number(parseAmount(netPnl.netPnlPercent).toFixed(2)),
               requiredPercent: this.config.takeProfitPercent,
             });
             // Back off before re-evaluating. The price-based TP trigger will
@@ -896,7 +1787,7 @@ export class MayhemEngine extends EventEmitter {
           positionId: position.id,
           reason,
           attempt,
-          netPnlPercent: +netPnl.netPnlPercent.toFixed(2),
+          netPnlPercent: Number(parseAmount(netPnl.netPnlPercent).toFixed(2)),
         });
 
         const result = await this.executeSell(position, sellQuote);
@@ -953,17 +1844,36 @@ export class MayhemEngine extends EventEmitter {
           return null;
         }
 
-        const exitFees = result.fees ?? 0;
+        const exitFees = result.fees ?? '0';
 
         // Book the close from the ACTUAL fill. Falling back to the quote is
         // permitted only when the venue reports no fill amounts, and is
         // logged as an estimate so the degradation is visible in the audit
         // trail rather than being indistinguishable from a real fill.
         const hasFillAmounts =
-          typeof result.filledInputAmount === 'number' &&
-          result.filledInputAmount > 0 &&
-          typeof result.filledOutputAmount === 'number' &&
-          result.filledOutputAmount > 0;
+          typeof result.filledInputAmount === 'string' &&
+          isPositiveDecimal(result.filledInputAmount) &&
+          parseAmount(result.filledInputAmount).lessThanOrEqualTo(parseAmount(position.quantity).times('1.000000001')) &&
+          typeof result.filledOutputAmount === 'string' &&
+          isPositiveDecimal(result.filledOutputAmount);
+
+        if (
+          result.filledInputAmount !== undefined &&
+          (!isPositiveDecimal(result.filledInputAmount) ||
+            parseAmount(result.filledInputAmount).greaterThan(parseAmount(position.quantity).times('1.000000001')))
+        ) {
+          throw new Error(
+            `Invalid confirmed exit input amount: ${result.filledInputAmount}`,
+          );
+        }
+        if (
+          result.filledOutputAmount !== undefined &&
+          !isPositiveDecimal(result.filledOutputAmount)
+        ) {
+          throw new Error(
+            `Invalid confirmed exit output amount: ${result.filledOutputAmount}`,
+          );
+        }
 
         if (!hasFillAmounts) {
           this.log('warn', 'EXIT_FILL_AMOUNTS_UNAVAILABLE', {
@@ -974,10 +1884,10 @@ export class MayhemEngine extends EventEmitter {
         }
 
         const soldQuantity = hasFillAmounts
-          ? (result.filledInputAmount as number)
+          ? (result.filledInputAmount as string)
           : position.quantity;
         const proceeds = hasFillAmounts
-          ? (result.filledOutputAmount as number)
+          ? (result.filledOutputAmount as string)
           : sellQuote.outputAmount;
 
         const closed = this.positionManager.closePosition(
@@ -1009,7 +1919,7 @@ export class MayhemEngine extends EventEmitter {
          * Comparing it against `realizedImpactPercent` is what tells us
          * whether any future pre-trade impact model can be trusted.
          */
-        const effectiveExitPrice = proceeds / soldQuantity;
+        const effectiveExitPrice = decimalString(parseAmount(proceeds).div(parseAmount(soldQuantity)));
         const quoteToFill = pctChange(sellQuote.pricePerToken, effectiveExitPrice);
         const slippage = {
           triggerPrice: trigger.price,
@@ -1025,7 +1935,7 @@ export class MayhemEngine extends EventEmitter {
           // `priceImpactPct`: a positive number means the fill was worse than
           // the quote. `-null` would be -0, which is why this is explicit.
           realizedImpactPercent:
-            quoteToFill === null ? null : +(-quoteToFill).toFixed(4),
+            quoteToFill === null ? null : Number(new Decimal(quoteToFill).negated().toFixed(4)),
           triggerToFillMs: Date.now() - trigger.at,
           attempts: attempt,
           entryLiquidity: position.entryLiquidity,
@@ -1059,12 +1969,15 @@ export class MayhemEngine extends EventEmitter {
           residualQuantity: partial ? closed.quantity : 0,
           grossPnl: closed.grossPnl,
           netPnl: closed.netPnl,
-          netPnlPercent: +closed.netPnlPercent.toFixed(2),
+          netPnlPercent: Number(parseAmount(closed.netPnlPercent).toFixed(2)),
           totalFees: closed.fees,
         });
 
         // Record the exit execution in research dataset
         try {
+          // Get current liquidity if available (this would need to be implemented based on available data sources)
+          const currentLiquidity = null; // Placeholder - would need to be replaced with actual current liquidity measurement
+
           this.researchRecorder.recordExecution({
             tokenMint: position.tokenMint,
             mint: position.tokenMint,
@@ -1076,13 +1989,52 @@ export class MayhemEngine extends EventEmitter {
             executedAmount: soldQuantity,
             requestedPrice: sellQuote.pricePerToken,
             executedPrice: effectiveExitPrice,
-            slippageBps: slippage.quoteToFillPercent ? Math.round((slippage.quoteToFillPercent) * 100) : 0,
+            slippageBps: slippage.quoteToFillPercent !== null
+              ? Number(new Decimal(slippage.quoteToFillPercent).times(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toFixed(0))
+              : null,
             slippagePercent: slippage.quoteToFillPercent,
             fees: exitFees,
             proceeds,
             pnl: closed.netPnl,
             pnlPercent: closed.netPnlPercent,
             holdDurationMs: Date.now() - position.entryTime.getTime(),
+            // Additional exit research fields
+            entryPrice: position.actualEntryPrice,
+            exitPrice: effectiveExitPrice,
+            peakPrice: position.peakPrice,
+            troughPrice: position.troughPrice,
+            unrealizedPnlPercent: parseAmount(position.entryNotional).greaterThan(0)
+              ? Number(parseAmount(position.unrealizedPnl).div(parseAmount(position.entryNotional)).times(100).toFixed(12))
+              : null,
+            drawdownPercent: position.peakPrice && position.troughPrice
+                ? Number(parseAmount(position.peakPrice).minus(parseAmount(position.troughPrice)).div(parseAmount(position.peakPrice)).times(100).toFixed(12))
+                : null,
+            mfePct: position.mfePct,
+            maePct: position.maePct,
+            currentLiquidity: currentLiquidity,
+            // Trigger state
+            exitTriggerReason: reason,
+            exitTriggerPrice: trigger.price, // Use the actual trigger price from ExitTrigger
+            exitTriggerThreshold: trigger.threshold, // From the ExitTrigger captured earlier
+            // Thresholds
+            stopLossThreshold: position.stopLoss,
+            takeProfitThreshold: position.takeProfit,
+            trailingStopThreshold: position.trailingStop,
+            maxHoldThresholdMs: this.config.maxHoldSeconds * 1000,
+            // Configuration snapshot
+            config: {
+              dryRun: process.env['DRY_RUN'] === 'true',
+              tradingEnabled: process.env['TRADING_ENABLED'] === 'true',
+              maxHoldSeconds: this.config.maxHoldSeconds,
+              stopLossPercent: this.config.stopLossPercent,
+              takeProfitPercent: this.config.takeProfitPercent,
+              trailingStopPercent: this.config.trailingStopPercent,
+              maxLiquidityParticipationBps: this.config.maxLiquidityParticipationBps,
+              minRiskScore: this.config.minRiskScore,
+              maxQuoteAgeMs: this.config.maxQuoteAgeMs,
+              maxSellPriceImpactPercent: this.config.maxSellPriceImpactPercent,
+              maxEntryPriceImpactBps: Number(process.env['MAX_ENTRY_PRICE_IMPACT_BPS'] ?? '750'),
+            },
             timestamp: new Date().toISOString(),
           });
         } catch (recordError) {
@@ -1142,6 +2094,7 @@ export class MayhemEngine extends EventEmitter {
       );
       return {
         outputAmount: quote.outputAmount,
+        outputRawAmount: quote.outputRawAmount,
         pricePerToken: quote.pricePerToken,
         priceImpactPct: quote.priceImpactPct,
         route: quote.route,
@@ -1167,32 +2120,35 @@ export class MayhemEngine extends EventEmitter {
     // Prefer a venue-reported fee, then a proportional estimate, then the
     // entry fee as a last resort.
     const venueFee =
-      typeof (sellQuote as { estimatedFeeSol?: number }).estimatedFeeSol === 'number'
-        ? (sellQuote as { estimatedFeeSol?: number }).estimatedFeeSol!
+      typeof sellQuote.estimatedFeeSol === 'string'
+        && isNonNegativeDecimal(sellQuote.estimatedFeeSol)
+        ? sellQuote.estimatedFeeSol
         : null;
 
     const proportionalFee =
-      position.entryNotional > 0
-        ? position.entryFees * (grossProceeds / position.entryNotional)
+      parseAmount(position.entryNotional).greaterThan(0)
+        ? decimalString(parseAmount(position.entryFees).times(parseAmount(grossProceeds).div(parseAmount(position.entryNotional))))
         : position.entryFees;
 
     const estimatedSellFees =
-      venueFee !== null && Number.isFinite(venueFee) && venueFee >= 0
+      venueFee !== null
         ? venueFee
-        : Math.max(proportionalFee, position.entryFees);
+        : decimalString(Decimal.max(parseAmount(proportionalFee), parseAmount(position.entryFees)));
 
     // Price impact is already reflected in the quote's outputAmount; this is
     // reported for observability only and must NOT be subtracted again.
     const estimatedPriceImpact =
-      grossProceeds * (sellQuote.priceImpactPct / 100);
+      decimalString(parseAmount(grossProceeds).times(parseAmount(sellQuote.priceImpactPct)).div(100));
 
     // Net proceeds = what we actually keep after paying sell fees.
     // Entry cost already includes entry fees (entryNotional = price * qty + entryFees).
     // We subtract only sell fees from grossProceeds, not entry fees again.
-    const netProceeds = grossProceeds - estimatedSellFees;
+    const netProceeds = decimalString(parseAmount(grossProceeds).minus(parseAmount(estimatedSellFees)));
     const entryCost = position.entryNotional;
-    const netPnl = netProceeds - entryCost;
-    const netPnlPercent = entryCost > 0 ? (netPnl / entryCost) * 100 : 0;
+    const netPnl = decimalString(parseAmount(netProceeds).minus(parseAmount(entryCost)));
+    const netPnlPercent = parseAmount(entryCost).greaterThan(0)
+      ? decimalString(parseAmount(netPnl).div(parseAmount(entryCost)).times(100))
+      : '0';
     const quoteAgeMs = Date.now() - sellQuote.timestamp;
 
     return {
@@ -1206,7 +2162,7 @@ export class MayhemEngine extends EventEmitter {
       quoteAgeMs,
       isStale: quoteAgeMs > this.config.maxQuoteAgeMs,
       excessivePriceImpact:
-        sellQuote.priceImpactPct > this.config.maxSellPriceImpactPercent,
+        parseAmount(sellQuote.priceImpactPct).greaterThan(this.config.maxSellPriceImpactPercent),
     };
   }
 
@@ -1224,6 +2180,8 @@ export class MayhemEngine extends EventEmitter {
   }
 
   private async checkMomentumConfirmation(position: Position): Promise<boolean> {
+    if (this.config.aggressiveExitOnMomentumReversal === false) return false;
+
     const windowMs = this.config.exitMomentumWindowMs ?? 10_000;
     const sampleInterval = this.config.exitMomentumSampleIntervalMs ?? 1_000;
     const confirmSamples = this.config.exitMomentumConfirmSamples ?? 3;
@@ -1248,10 +2206,14 @@ export class MayhemEngine extends EventEmitter {
     const sellPressure = typeof sample.sellPressure === 'number' ? sample.sellPressure : null;
     const netFlow = typeof sample.netFlowPct === 'number' ? sample.netFlowPct : null;
 
-    let deterioration = false;
-    if (buyPressure !== null && buyPressure < buyThreshold) deterioration = true;
-    if (sellPressure !== null && sellPressure > sellThreshold) deterioration = true;
-    if (netFlow !== null && netFlow < netFlowThreshold) deterioration = true;
+    // Require both momentum and volume-side deterioration. Missing evidence
+    // cannot confirm a reversal, and one noisy metric must not liquidate.
+    const momentumReversed =
+      (buyPressure !== null && buyPressure < buyThreshold) ||
+      (netFlow !== null && netFlow < netFlowThreshold);
+    const volumeReversed =
+      sellPressure !== null && sellPressure > sellThreshold;
+    const deterioration = momentumReversed && volumeReversed;
 
     if (deterioration) {
       state.count = (state.count ?? 0) + 1;
@@ -1477,17 +2439,19 @@ export class MayhemEngine extends EventEmitter {
       // Build the lifecycle event record
       const lifecycle: PriceLifecycleEvent = {
         observationTime: tracking.observationTime,
-        observationPrice: tracking.observationPrice,
+        observationPrice: decimalToNumberForResearch(tracking.observationPrice),
         signalTime: tracking.signalTime ?? tracking.observationTime,
-        signalPrice: tracking.signalPrice ?? tracking.observationPrice,
+        signalPrice: decimalToNumberForResearch(
+          tracking.signalPrice ?? tracking.observationPrice,
+        ),
         qualificationTime: tracking.qualificationTime ?? Date.now(),
-        qualifiedEntryPrice: position.qualifiedEntryPrice,
+        qualifiedEntryPrice: decimalToNumberForResearch(position.qualifiedEntryPrice),
       };
 
       // Only include execution data if available
       if (tracking.executionTime && tracking.executionPrice) {
         lifecycle.executionTime = tracking.executionTime;
-        lifecycle.executionPrice = tracking.executionPrice;
+        lifecycle.executionPrice = decimalToNumberForResearch(tracking.executionPrice);
       }
 
       // Record to research database
@@ -1496,7 +2460,10 @@ export class MayhemEngine extends EventEmitter {
         lifecycle,
         true, // position was opened
         position.id,
-        tracking.priceHistory,
+        tracking.priceHistory.map(({ timestamp, price }) => ({
+          timestamp,
+          price: decimalToNumberForResearch(price),
+        })),
       );
 
       // Clean up lifecycle tracking to avoid memory leaks

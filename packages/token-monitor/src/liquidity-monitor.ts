@@ -1,7 +1,6 @@
-import { EventEmitter } from 'node:events';
 import type { LiquidityAlert } from './types';
 
-export class LiquidityMonitor extends EventEmitter {
+export class LiquidityMonitor {
   private readonly watchedPools = new Map<
     string,
     { tokenMint: string; initialLiquidity: number }
@@ -19,8 +18,6 @@ export class LiquidityMonitor extends EventEmitter {
       creatorSellDetection?: boolean;
     } = {},
   ) {
-    super();
-
     this.liquidityDropExitPercent =
       opts.liquidityDropExitPercent ?? 40;
   }

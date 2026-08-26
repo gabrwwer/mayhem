@@ -1,14 +1,15 @@
-
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
+    "types": [],
     "declaration": true,
     "incremental": true,
     "declarationMap": true,
     "sourceMap": true,
     "composite": true,
+    "isolatedModules": false,
     "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],

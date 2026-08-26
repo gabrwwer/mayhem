@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { ingestTransaction, getComputedMetrics } from '../../src/metrics';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { ingestTransaction, ingestHolderObservation, getComputedMetrics } from '../src/metrics';
 
 describe('metrics aggregation', () => {
   it('aggregates buys: count, unique buyers, and total volume', () => {
@@ -29,10 +29,8 @@ describe('metrics aggregation', () => {
     expect(metrics.flow.buyVolume1mSol.value).toBeCloseTo(0.5, 9);
   });
 });
-import { describe, it, expect, beforeEach } from 'vitest';
-import { ingestTransaction, ingestHolderObservation, getComputedMetrics } from '../src/metrics';
 
-describe('metrics aggregation', () => {
+describe('metrics normalized discovery output', () => {
   const mint = 'TESTMINT1';
 
   beforeEach(() => {

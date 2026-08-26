@@ -18,7 +18,8 @@
     "@mayhem/risk-engine": "workspace:*",
     "@mayhem/token-monitor": "workspace:*",
     "@mayhem/rapidlaunch-adapter": "workspace:*",
-    "@mayhem/execution": "workspace:*"
+    "@mayhem/execution": "workspace:*",
+    "bs58": "^5.0.0"
   },
   "devDependencies": {
     "ts-node": "^10.9.2",

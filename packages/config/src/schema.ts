@@ -165,6 +165,7 @@ const FlatEnvSchema = z.object({
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   TRADING_ENABLED: envBool(true),
   DRY_RUN: envBool(false),
+  USE_LIVE_ADAPTER: envBool(false),
 
   // â”€â”€ RPC â”€â”€
   RPC_URL_1: envUrl("https://api.mainnet-beta.solana.com"),
@@ -218,6 +219,10 @@ const FlatEnvSchema = z.object({
   SNIPE_POSITION_SOL: envSolOptional(),
   MAX_POSITION_SOL: envSolOptional(),
   MAX_SLIPPAGE_PCT: envPct(30),
+  MIN_MOMENTUM_SAMPLES: z.preprocess(
+    (v) => (v === undefined || v === "" ? undefined : Number(v)),
+    z.number().int().min(1).default(4),
+  ),
   MAX_CONCURRENT_POSITIONS: envNumOptional(),
   MAX_OPEN_POSITIONS: envNumOptional(),
   MAX_TX_AGE_MS: envNum(5_000),
@@ -248,8 +253,11 @@ const FlatEnvSchema = z.object({
 
   // â”€â”€ EXIT LADDER â”€â”€
   SELL_LADDER: envLadder("30@2x,30@3x,40@5x"),
+  TAKE_PROFIT_PERCENT: envNum(50),
   TRAILING_STOP_PCT: envPct(25),
   STOP_LOSS_PCT: envPct(40),
+  MAX_HOLD_SECONDS: envNum(600),
+  EXPECTED_EXIT_COST_PCT: envNum(2),
 
   // â”€â”€ DATABASE â”€â”€
   PGHOST: envStr("localhost"),
@@ -342,6 +350,7 @@ export const BotConfigSchema = FlatEnvSchema
         logLevel: e.LOG_LEVEL,
         tradingEnabled: e.TRADING_ENABLED,
         dryRun: e.DRY_RUN,
+        useLiveAdapter: e.USE_LIVE_ADAPTER,
       },
 
       rpc: {
@@ -378,6 +387,7 @@ export const BotConfigSchema = FlatEnvSchema
     snipe: {
       positionLamports: solToLamports(positionSol),
       maxSlippagePct: e.MAX_SLIPPAGE_PCT,
+      minMomentumSamples: e.MIN_MOMENTUM_SAMPLES,
       maxConcurrentPositions,
       maxTxAgeMs: e.MAX_TX_AGE_MS,
       preflightSim: e.PREFLIGHT_SIM,
@@ -406,8 +416,11 @@ export const BotConfigSchema = FlatEnvSchema
 
     exit: {
       ladder: parseLadder(e.SELL_LADDER), // format already regex-gated â€” cannot throw
+      takeProfitPct: e.TAKE_PROFIT_PERCENT,
       trailingStopPct: e.TRAILING_STOP_PCT,
       stopLossPct: e.STOP_LOSS_PCT,
+      maxHoldSeconds: e.MAX_HOLD_SECONDS,
+      expectedExitCostPct: e.EXPECTED_EXIT_COST_PCT,
     },
 
     database: {
@@ -515,10 +528,9 @@ export const BotConfigSchema = FlatEnvSchema
         path: ["breaker", "maxDrawdownPct"],
       });
     }
-    // Notifications: enabled without creds = silent bot. Refuse.
-    // Allow the dev combination TRADING_ENABLED=true + DRY_RUN=true when
-    // running in development mode to support simulated entry testing.
-    if (cfg.env.tradingEnabled && cfg.env.dryRun && cfg.env.nodeEnv !== 'development') {
+    // DRY_RUN is the hard safety gate. TRADING_ENABLED must never override it
+    // or coexist with it as an apparently-live configuration.
+    if (cfg.env.tradingEnabled && cfg.env.dryRun) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "TRADING_ENABLED=true cannot be combined with DRY_RUN=true",
@@ -555,6 +567,7 @@ export type BotConfig = {
     logLevel: "debug" | "info" | "warn" | "error";
     tradingEnabled: boolean;
     dryRun: boolean;
+    useLiveAdapter: boolean;
     
   };
   rpc: {
@@ -571,7 +584,8 @@ export type BotConfig = {
   };
   wallets: { keyvaultDir: string; hotWalletId: string; devWalletId: string; feeWalletId: string };
   snipe: {
-    positionLamports: bigint; maxSlippagePct: number; maxConcurrentPositions: number;
+    positionLamports: bigint; maxSlippagePct: number; minMomentumSamples: number;
+    maxConcurrentPositions: number;
     maxTxAgeMs: number; preflightSim: boolean;
     backrunEnabled: boolean; minWhaleLamports: bigint; backrunPositionLamports: bigint;
   };
@@ -585,7 +599,14 @@ export type BotConfig = {
     maxDailyLossLamports: bigint; maxConsecutiveLosses: number;
     maxDrawdownPct: number; tripCooldownMs: number; persistTrips: boolean;
   };
-  exit: { ladder: SellRung[]; trailingStopPct: number; stopLossPct: number };
+  exit: {
+    ladder: SellRung[];
+    takeProfitPct: number;
+    trailingStopPct: number;
+    stopLossPct: number;
+    maxHoldSeconds: number;
+    expectedExitCostPct: number;
+  };
   database: {
     host: string; port: number; name: string; user: string;
     password?: string; ssl: boolean; poolSize: number;

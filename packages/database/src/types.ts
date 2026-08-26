@@ -13,13 +13,16 @@ export interface DbToken {
   created_at: Date;
 }
 
+// NOTE: Financial fields are represented as strings to preserve exact
+// NUMERIC values from Postgres and to interoperate with Decimal.js based
+// arithmetic in other packages. Using `number` would lose precision.
 export interface DbLaunch {
   id: string;
   token_id: string;
   platform: string;
   pool_address: string;
   quote_token: string;
-  initial_liquidity: number;
+  initial_liquidity: string; // NUMERIC as string
   launch_time: Date;
   status: string;
 }
@@ -29,9 +32,9 @@ export interface DbPool {
   address: string;
   token_mint: string;
   quote_mint: string;
-  liquidity: number;
-  reserve_token: number;
-  reserve_quote: number;
+  liquidity: string; // NUMERIC as string
+  reserve_token: string; // NUMERIC as string
+  reserve_quote: string; // NUMERIC as string
   status: string;
   last_updated: Date;
 }
@@ -43,11 +46,11 @@ export interface DbTrade {
   position_id: string | null;
   side: TradeSide;
   token_mint: string;
-  amount_sol: number;
-  amount_token: number;
-  price: number;
+  amount_sol: string; // NUMERIC as string
+  amount_token: string; // NUMERIC as string
+  price: string; // NUMERIC as string
   slippage_bps: number;
-  fees_sol: number;
+  fees_sol: string; // NUMERIC as string
   tx_signature: string;
   status: string;
   created_at: Date;
@@ -58,20 +61,20 @@ export type PositionStatus = "open" | "closed";
 export interface DbPosition {
   id: string;
   token_mint: string;
-  entry_price: number;
+  entry_price: string; // NUMERIC as string
   entry_time: Date;
-  quantity: number;
+  quantity: string; // NUMERIC as string
   entry_tx: string;
-  current_price: number;
-  unrealized_pnl: number;
-  realized_pnl: number;
-  stop_loss: number | null;
-  take_profit: number | null;
-  trailing_stop: number | null;
+  current_price: string; // NUMERIC as string
+  unrealized_pnl: string; // NUMERIC as string
+  realized_pnl: string; // NUMERIC as string
+  stop_loss: string | null; // NUMERIC as string
+  take_profit: string | null; // NUMERIC as string
+  trailing_stop: string | null; // NUMERIC as string
   exit_reason: string | null;
   exit_tx: string | null;
-  fees: number;
-  slippage: number;
+  fees: string; // NUMERIC as string
+  slippage: string; // NUMERIC as string
   status: PositionStatus;
   closed_at: Date | null;
 }
@@ -83,7 +86,7 @@ export interface DbTransaction {
   tx_signature: string;
   type: string;
   token_mint: string;
-  amount_sol: number;
+  amount_sol: string; // NUMERIC as string
   status: TransactionStatus;
   created_at: Date;
   confirmed_at: Date | null;
@@ -107,7 +110,7 @@ export interface DbBotEvent {
 
 export interface DbWalletBalance {
   id: string;
-  sol_balance: number;
+  sol_balance: string; // NUMERIC as string
   token_balances: Record<string, unknown>;
   updated_at: Date;
 }

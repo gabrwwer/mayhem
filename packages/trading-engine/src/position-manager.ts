@@ -1,5 +1,6 @@
 
 import { randomUUID } from 'crypto';
+import Decimal from 'decimal.js';
 import {
   TradingConfig,
   Position,
@@ -8,6 +9,7 @@ import {
   PositionStore,
   SerializedPosition,
 } from './types';
+import { DecimalValue, parseAmount } from './calculations';
 
 const LOCK_EPSILON = 1e-9;
 
@@ -21,11 +23,45 @@ const LOCK_LADDER: ReadonlyArray<{ activation: number; lock: number }> = [
   { activation: 100, lock: 80 },
 ];
 
+function decimalString(value: Decimal): DecimalValue {
+  return value.toFixed();
+}
+
+function isPositiveDecimal(value: DecimalValue): boolean {
+  try {
+    return parseAmount(value).isFinite() && parseAmount(value).greaterThan(0);
+  } catch {
+    return false;
+  }
+}
+
+function isNonNegativeDecimal(value: DecimalValue): boolean {
+  try {
+    return parseAmount(value).isFinite() && parseAmount(value).greaterThanOrEqualTo(0);
+  } catch {
+    return false;
+  }
+}
+
+function decimalMax(a: DecimalValue, b: DecimalValue): DecimalValue {
+  return decimalString(Decimal.max(parseAmount(a), parseAmount(b)));
+}
+
+function pctChangeDecimal(from: DecimalValue, to: DecimalValue): Decimal {
+  const base = parseAmount(from);
+  if (base.isZero()) return new Decimal(0);
+  return parseAmount(to).minus(base).div(base).times(100);
+}
+
 export class PositionManager {
   private positions: Map<string, Position> = new Map();
   private config: TradingConfig;
   private store: PositionStore | undefined;
   private onPersistError: ((error: unknown) => void) | undefined;
+
+  // Persistence is serialized so an older snapshot can never finish
+  // after a newer snapshot and overwrite it.
+  private persistQueue: Promise<void> = Promise.resolve();
 
   constructor(
     config: TradingConfig,
@@ -56,18 +92,33 @@ export class PositionManager {
   }
 
   /**
-   * Persist the open book. Fire-and-forget by design: a storage failure
-   * must not block an exit. The error hook exists so the caller can alert —
-   * silently swallowing it would recreate the "state vanished on restart"
-   * bug with extra steps.
+   * Persist the open book in strict invocation order.
+   *
+   * IMPORTANT:
+   * An exit can change an OPEN position to CLOSED between persistence
+   * calls. Fire-and-forget writes can complete out of order and allow an
+   * older OPEN snapshot to overwrite a newer CLOSED snapshot.
+   *
+   * Snapshots are captured synchronously, then writes are serialized.
+   * A failed write is reported but does not break the queue, allowing
+   * subsequent state changes to continue persisting.
    */
   private persist(): void {
     if (!this.store) return;
 
     const snapshot = this.getOpenPositions().map(serializePosition);
-    void this.store.saveOpen(snapshot).catch((error) => {
-      this.onPersistError?.(error);
-    });
+
+    this.persistQueue = this.persistQueue
+      .catch(() => {
+        // Keep the queue alive after a previous persistence failure.
+      })
+      .then(async () => {
+        try {
+          await this.store!.saveOpen(snapshot);
+        } catch (error) {
+          this.onPersistError?.(error);
+        }
+      });
   }
 
   /** Flush synchronously — call during graceful shutdown. */
@@ -78,12 +129,12 @@ export class PositionManager {
 
   openPosition(
     tokenMint: string,
-    entryPrice: number,
-    quantity: number,
+    entryPrice: DecimalValue,
+    quantity: DecimalValue,
     entryTx?: string,
-    actualEntryPrice?: number,
-    entryFees?: number,
-    entryLiquidity?: number,
+    actualEntryPrice?: DecimalValue,
+    entryFees?: DecimalValue,
+    entryLiquidity?: DecimalValue,
   ): Position {
     if (!this.canOpenPosition()) {
       throw new Error(
@@ -91,19 +142,43 @@ export class PositionManager {
       );
     }
 
-    if (!Number.isFinite(entryPrice) || entryPrice <= 0) {
+    if (typeof tokenMint !== 'string' || tokenMint.trim().length === 0) {
+      throw new Error('Invalid token mint');
+    }
+
+    if (!isPositiveDecimal(entryPrice)) {
       throw new Error(`Invalid entry price: ${entryPrice}`);
     }
 
-    if (!Number.isFinite(quantity) || quantity <= 0) {
+    if (!isPositiveDecimal(quantity)) {
       throw new Error(`Invalid quantity: ${quantity}`);
     }
 
     const qualifiedEntryPrice = entryPrice;
-    const effectiveEntry = actualEntryPrice && actualEntryPrice > 0
+    const effectiveEntry = actualEntryPrice && isPositiveDecimal(actualEntryPrice)
       ? actualEntryPrice : entryPrice;
-    const fees = entryFees ?? 0;
-    const notional = effectiveEntry * quantity + fees;
+    const fees = entryFees ?? '0';
+    if (!isNonNegativeDecimal(fees)) {
+      throw new Error(`Invalid entry fees: ${fees}`);
+    }
+    if (
+      entryLiquidity !== undefined &&
+      !isNonNegativeDecimal(entryLiquidity)
+    ) {
+      throw new Error(`Invalid entry liquidity: ${entryLiquidity}`);
+    }
+    const notional = decimalString(
+      parseAmount(effectiveEntry).times(parseAmount(quantity)).plus(parseAmount(fees)),
+    );
+    const stopLoss = decimalString(
+      parseAmount(effectiveEntry).times(new Decimal(1).minus(new Decimal(this.config.stopLossPercent).div(100))),
+    );
+    const takeProfit = this.config.takeProfitPercent > 0
+      ? decimalString(
+        parseAmount(effectiveEntry).times(new Decimal(1).plus(new Decimal(this.config.takeProfitPercent).div(100))),
+      )
+      : '0';
+    const now = Date.now();
 
     const position: Position = {
       id: randomUUID(),
@@ -121,23 +196,19 @@ export class PositionManager {
       entryFees: fees,
       entryTx: entryTx ?? null,
       currentPrice: effectiveEntry,
-      unrealizedPnl: 0,
-      realizedPnl: 0,
-      grossPnl: 0,
-      netPnl: 0,
-      netPnlPercent: 0,
+      unrealizedPnl: '0',
+      realizedPnl: '0',
+      grossPnl: '0',
+      netPnl: '0',
+      netPnlPercent: '0',
 
-      stopLoss:
-        effectiveEntry * (1 - this.config.stopLossPercent / 100),
+      stopLoss,
 
       // Take-profit only applies if takeProfitPercent > 0 (0 = disabled).
       // To avoid positive values: set to Math.max(0, result).
-      takeProfit:
-        this.config.takeProfitPercent > 0
-          ? effectiveEntry * (1 + this.config.takeProfitPercent / 100)
-          : Infinity, // Disabled: can never reach Infinity
+      takeProfit,
 
-      trailingStop: 0,
+      trailingStop: '0',
 
       trailingStopHighPrice: effectiveEntry,
 
@@ -155,15 +226,17 @@ export class PositionManager {
       lastExitAttemptAt: null,
       lastExitError: null,
       lastExitQuotePrice: null,
-      entryLiquidity: entryLiquidity ?? 0,
-      priceAsOf: Date.now(),
+      entryLiquidity: entryLiquidity ?? '0',
+      priceAsOf: now,
       takeProfitDeferredUntil: null,
       staleExitDeferredUntil: null,
-      priceHistory: [{ ts: Date.now(), price: effectiveEntry }],
+      protectedFloorPrice: '0',
+      profitManagementState: 'INITIAL_DEVELOPMENT',
+      priceHistory: [{ ts: now, price: effectiveEntry }],
       peakPrice: effectiveEntry,
       troughPrice: effectiveEntry,
-      mfePct: 0,
-      maePct: 0,
+      mfePct: '0',
+      maePct: '0',
       returns: {},
       holdDurationMs: 0,
     };
@@ -175,7 +248,7 @@ export class PositionManager {
 
   updatePosition(
     id: string,
-    currentPrice: number,
+    currentPrice: DecimalValue,
   ): PositionUpdate {
     const position = this.positions.get(id);
 
@@ -183,7 +256,7 @@ export class PositionManager {
       throw new Error(`Position ${id} not found`);
     }
 
-    if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+    if (!isPositiveDecimal(currentPrice)) {
       throw new Error(`Invalid current price: ${currentPrice}`);
     }
 
@@ -219,22 +292,20 @@ export class PositionManager {
     }
 
     // Update peak/trough and MFE/MAE
-    if (!position.peakPrice || currentPrice > position.peakPrice) {
+    if (!position.peakPrice || parseAmount(currentPrice).greaterThan(parseAmount(position.peakPrice))) {
       position.peakPrice = currentPrice;
     }
-    if (!position.troughPrice || currentPrice < position.troughPrice) {
+    if (!position.troughPrice || parseAmount(currentPrice).lessThan(parseAmount(position.troughPrice))) {
       position.troughPrice = currentPrice;
     }
     position.mfePct = position.peakPrice && position.actualEntryPrice
-      ? Math.max(0, ((position.peakPrice - position.actualEntryPrice) / position.actualEntryPrice) * 100)
-      : 0;
+      ? decimalString(Decimal.max(0, pctChangeDecimal(position.actualEntryPrice, position.peakPrice)))
+      : '0';
     position.maePct = position.troughPrice && position.actualEntryPrice
-      ? Math.max(0, ((position.actualEntryPrice - position.troughPrice) / position.actualEntryPrice) * 100)
-      : 0;
+      ? decimalString(Decimal.max(0, pctChangeDecimal(position.troughPrice, position.actualEntryPrice)))
+      : '0';
 
-    const profitPercent =
-      ((currentPrice - position.actualEntryPrice) /
-        position.actualEntryPrice) * 100;
+    const profitPercent = pctChangeDecimal(position.actualEntryPrice, currentPrice);
 
     /*
      * ============================================================
@@ -267,10 +338,49 @@ export class PositionManager {
      * ============================================================
      */
 
+    const protectionActivationPercent = Math.max(
+      25,
+      Number.isFinite(this.config.profitLockActivationPercent)
+        ? this.config.profitLockActivationPercent
+        : 25,
+    );
+    const expectedExitCostPercent = Math.max(
+      0,
+      Number.isFinite(this.config.expectedExitCostPercent)
+        ? this.config.expectedExitCostPercent!
+        : 0,
+    );
+
+    if (profitPercent.plus(LOCK_EPSILON).greaterThanOrEqualTo(protectionActivationPercent)) {
+      const principal = parseAmount(position.actualEntryPrice).times(parseAmount(position.quantity));
+      const expectedExitCosts = principal.times(expectedExitCostPercent).div(100);
+      const floor = principal.plus(parseAmount(position.entryFees)).plus(expectedExitCosts)
+        .div(parseAmount(position.quantity));
+      if (
+        floor.isFinite() &&
+        floor.greaterThan(parseAmount(position.protectedFloorPrice ?? '0'))
+      ) {
+        position.protectedFloorPrice = decimalString(floor);
+      }
+      position.profitManagementState =
+        profitPercent.plus(LOCK_EPSILON).greaterThanOrEqualTo(50)
+          ? 'TRAILING'
+          : 'PROFIT_PROTECTION';
+    } else {
+      position.profitManagementState = 'INITIAL_DEVELOPMENT';
+    }
+
+    if (
+      parseAmount(position.protectedFloorPrice ?? '0').isFinite() &&
+      parseAmount(position.protectedFloorPrice ?? '0').greaterThan(parseAmount(position.stopLoss))
+    ) {
+      position.stopLoss = position.protectedFloorPrice!;
+    }
+
     let selectedLock = 0;
 
     for (const level of LOCK_LADDER) {
-      if (profitPercent + LOCK_EPSILON >= level.activation) {
+      if (profitPercent.plus(LOCK_EPSILON).greaterThanOrEqualTo(level.activation)) {
         selectedLock = level.lock;
       }
     }
@@ -282,15 +392,14 @@ export class PositionManager {
     if (position.highestLockPercent > 0) {
       position.profitLockActive = true;
 
-      const lockedPrice =
-        position.actualEntryPrice *
-        (1 + position.highestLockPercent / 100);
+      const lockedPrice = parseAmount(position.actualEntryPrice)
+        .times(new Decimal(1).plus(new Decimal(position.highestLockPercent).div(100)));
 
       if (
-        Number.isFinite(lockedPrice) &&
-        lockedPrice > position.stopLoss
+        lockedPrice.isFinite() &&
+        lockedPrice.greaterThan(parseAmount(position.stopLoss))
       ) {
-        position.stopLoss = lockedPrice;
+        position.stopLoss = decimalString(lockedPrice);
       }
     }
 
@@ -304,39 +413,48 @@ export class PositionManager {
      */
 
     const trailingActivationPercent = Math.max(
-      15,
+      50,
+      Number.isFinite(this.config.takeProfitPercent)
+        ? this.config.takeProfitPercent
+        : 50,
       Number.isFinite(this.config.trailingActivationPercent)
         ? this.config.trailingActivationPercent
         : 15,
     );
 
     const trailingActivated =
-      profitPercent + LOCK_EPSILON >= trailingActivationPercent;
+      profitPercent.plus(LOCK_EPSILON).greaterThanOrEqualTo(trailingActivationPercent);
 
     if (trailingActivated) {
-      if (currentPrice > position.trailingStopHighPrice) {
+      if (parseAmount(currentPrice).greaterThan(parseAmount(position.trailingStopHighPrice))) {
         position.trailingStopHighPrice = currentPrice;
       }
 
       const trailingMultiplier =
         1 - this.config.trailingStopPercent / 100;
 
-      const newTrailingStop =
-        position.trailingStopHighPrice * trailingMultiplier;
+      const newTrailingStop = parseAmount(position.trailingStopHighPrice).times(trailingMultiplier);
 
       if (
-        Number.isFinite(newTrailingStop) &&
-        newTrailingStop > position.trailingStop
+        newTrailingStop.isFinite() &&
+        newTrailingStop.greaterThan(parseAmount(position.trailingStop))
       ) {
-        position.trailingStop = newTrailingStop;
+        position.trailingStop = decimalString(newTrailingStop);
       }
 
       if (
-        Number.isFinite(position.trailingStop) &&
-        position.trailingStop > position.stopLoss
+        parseAmount(position.trailingStop).isFinite() &&
+        parseAmount(position.trailingStop).greaterThan(parseAmount(position.stopLoss))
       ) {
         position.stopLoss = position.trailingStop;
       }
+    }
+
+    if (
+      parseAmount(position.protectedFloorPrice ?? '0').isFinite() &&
+      parseAmount(position.protectedFloorPrice ?? '0').greaterThan(parseAmount(position.stopLoss))
+    ) {
+      position.stopLoss = position.protectedFloorPrice!;
     }
 
     const exitConditions = this.buildExitConditions(position);
@@ -392,9 +510,9 @@ export class PositionManager {
   closePosition(
     id: string,
     fill: {
-      soldQuantity: number;
-      proceeds: number;
-      exitFees?: number;
+      soldQuantity: DecimalValue;
+      proceeds: DecimalValue;
+      exitFees?: DecimalValue;
       exitTx?: string;
     },
     exitReason: string,
@@ -411,42 +529,47 @@ export class PositionManager {
 
     const { soldQuantity, proceeds } = fill;
 
-    if (!Number.isFinite(soldQuantity) || soldQuantity <= 0) {
+    if (!isPositiveDecimal(soldQuantity)) {
       throw new Error(`Invalid sold quantity: ${soldQuantity}`);
     }
-    if (!Number.isFinite(proceeds) || proceeds < 0) {
+    if (!isNonNegativeDecimal(proceeds)) {
       throw new Error(`Invalid proceeds: ${proceeds}`);
     }
-    if (soldQuantity > position.quantity * (1 + 1e-9)) {
+    const sold = parseAmount(soldQuantity);
+    const held = parseAmount(position.quantity);
+    if (sold.greaterThan(held.times(new Decimal(1).plus('0.000000001')))) {
       throw new Error(
         `Fill quantity ${soldQuantity} exceeds position quantity ${position.quantity}`,
       );
     }
 
-    const exitFees = fill.exitFees ?? 0;
-    const realizedFraction = soldQuantity / position.quantity;
+    const exitFees = fill.exitFees ?? '0';
+    if (!isNonNegativeDecimal(exitFees)) {
+      throw new Error(`Invalid exit fees: ${exitFees}`);
+    }
+    const realizedFraction = sold.div(held);
 
     // Cost basis attributable to the portion actually sold.
-    const costBasisSold = position.entryNotional * realizedFraction;
-    const realizedGross = proceeds - costBasisSold + position.entryFees * realizedFraction;
-    const realizedNet = proceeds - costBasisSold - exitFees;
+    const costBasisSold = parseAmount(position.entryNotional).times(realizedFraction);
+    const realizedGross = parseAmount(proceeds).minus(costBasisSold).plus(parseAmount(position.entryFees).times(realizedFraction));
+    const realizedNet = parseAmount(proceeds).minus(costBasisSold).minus(parseAmount(exitFees));
 
-    const effectiveExitPrice = proceeds / soldQuantity;
+    const effectiveExitPrice = parseAmount(proceeds).div(sold);
 
-    position.currentPrice = Number.isFinite(effectiveExitPrice) && effectiveExitPrice > 0
-      ? effectiveExitPrice
+    position.currentPrice = effectiveExitPrice.isFinite() && effectiveExitPrice.greaterThan(0)
+      ? decimalString(effectiveExitPrice)
       : position.currentPrice;
     position.priceAsOf = Date.now();
 
-    position.grossPnl += realizedGross;
-    position.fees += exitFees;
-    position.netPnl += realizedNet;
+    position.grossPnl = decimalString(parseAmount(position.grossPnl).plus(realizedGross));
+    position.fees = decimalString(parseAmount(position.fees).plus(parseAmount(exitFees)));
+    position.netPnl = decimalString(parseAmount(position.netPnl).plus(realizedNet));
     position.realizedPnl = position.netPnl;
     // Divide by the ORIGINAL cost basis, not the live one — the live value
     // shrinks with each partial exit and would inflate the reported return.
-    position.netPnlPercent = position.originalEntryNotional > 0
-      ? (position.netPnl / position.originalEntryNotional) * 100
-      : 0;
+    position.netPnlPercent = parseAmount(position.originalEntryNotional).greaterThan(0)
+      ? decimalString(parseAmount(position.netPnl).div(parseAmount(position.originalEntryNotional)).times(100))
+      : '0';
 
     position.exitTx = fill.exitTx ?? position.exitTx;
 
@@ -461,30 +584,32 @@ export class PositionManager {
       // find the first sample at or after target
       const sample = history.find((h) => h.ts >= target) || null;
       if (sample) {
-        returns[`return_${ms / 1000}s`] = ((sample.price - position.actualEntryPrice) / position.actualEntryPrice) * 100;
+        returns[`return_${ms / 1000}s`] = Number(
+          pctChangeDecimal(position.actualEntryPrice, sample.price).toFixed(12),
+        );
       } else {
         returns[`return_${ms / 1000}s`] = null;
       }
     }
     position.returns = returns;
     // Ensure final MFE/MAE reflect the lifetime values
-    position.mfePct = position.mfePct ?? 0;
-    position.maePct = position.maePct ?? 0;
+    position.mfePct = position.mfePct ?? '0';
+    position.maePct = position.maePct ?? '0';
 
-    const residual = position.quantity - soldQuantity;
-    const fullyClosed = residual <= position.quantity * 1e-9;
+    const residual = held.minus(sold);
+    const fullyClosed = residual.lessThanOrEqualTo(held.times('0.000000001'));
 
     if (fullyClosed) {
-      position.quantity = 0;
-      position.unrealizedPnl = 0;
+      position.quantity = '0';
+      position.unrealizedPnl = '0';
       position.exitReason = exitReason;
       position.status = 'closed';
     } else {
       // Partial fill: keep the remainder live so it is still monitored and
       // still has a stop-loss. Scale the remaining cost basis accordingly.
-      position.quantity = residual;
-      position.entryNotional -= costBasisSold;
-      position.entryFees *= 1 - realizedFraction;
+      position.quantity = decimalString(residual);
+      position.entryNotional = decimalString(parseAmount(position.entryNotional).minus(costBasisSold));
+      position.entryFees = decimalString(parseAmount(position.entryFees).times(new Decimal(1).minus(realizedFraction)));
       position.exitReason = `${exitReason}:partial`;
       position.status = 'open';
       position.unrealizedPnl = this.calculatePnl(
@@ -498,7 +623,7 @@ export class PositionManager {
     return position;
   }
 
-  recordExitAttempt(id: string, error: string, quotePrice?: number): void {
+  recordExitAttempt(id: string, error: string, quotePrice?: DecimalValue): void {
     const position = this.positions.get(id);
     if (!position) return;
 
@@ -526,10 +651,30 @@ export class PositionManager {
     }
   }
 
-  /** Defer take-profit re-evaluation until `until` (epoch millis). */
+  /**
+   * Defer take-profit re-evaluation until `until` (epoch millis).
+   *
+   * Safety rules:
+   * - Never allow an invalid/past timestamp.
+   * - Never defer TP for more than 60 seconds at a time.
+   * - Persist the state so a restart cannot silently lose the lifecycle state.
+   * - This only affects take-profit evaluation. Hard stop, stop-loss,
+   *   trailing-stop, time-exit and stale-price exits remain independent.
+   */
   deferTakeProfit(id: string, until: number): void {
     const position = this.positions.get(id);
-    if (position) position.takeProfitDeferredUntil = until;
+    if (!position || position.status !== 'open') return;
+
+    const now = Date.now();
+    const requestedUntil = Number.isFinite(until) ? until : now;
+    const maxDeferUntil = now + 60_000;
+
+    position.takeProfitDeferredUntil = Math.min(
+      Math.max(requestedUntil, now),
+      maxDeferUntil,
+    );
+
+    this.persist();
   }
 
   /** Defer the next stale-price force-exit attempt until `until`. */
@@ -562,20 +707,21 @@ export class PositionManager {
   }
 
   calculatePnl(
-    entry: number,
-    current: number,
-    quantity: number,
-  ): number {
-    return (current - entry) * quantity;
+    entry: DecimalValue,
+    current: DecimalValue,
+    quantity: DecimalValue,
+  ): DecimalValue {
+    return decimalString(parseAmount(current).minus(parseAmount(entry)).times(parseAmount(quantity)));
   }
 
   private checkTakeProfit(position: Position): ExitCondition {
-    // Only trigger take-profit if explicitly configured with positive threshold
-    // and current price has crossed the target. takeProfitPercent=0 means disabled.
-    const isEnabled = this.config.takeProfitPercent > 0;
+    // TAKE_PROFIT_PERCENT is a profit-protection/trailing milestone, never a
+    // liquidation trigger. Protection is represented by stop_loss/trailing_stop.
     return {
       type: 'take_profit',
-      triggered: isEnabled && position.currentPrice >= position.takeProfit,
+      triggered:
+        this.config.takeProfitPercent > 0 &&
+        parseAmount(position.currentPrice).greaterThanOrEqualTo(parseAmount(position.takeProfit)),
       value: position.takeProfit,
     };
   }
@@ -583,7 +729,7 @@ export class PositionManager {
   private checkStopLoss(position: Position): ExitCondition {
     return {
       type: 'stop_loss',
-      triggered: position.currentPrice <= position.stopLoss,
+      triggered: parseAmount(position.currentPrice).lessThanOrEqualTo(parseAmount(position.stopLoss)),
       value: position.stopLoss,
     };
   }
@@ -592,20 +738,30 @@ export class PositionManager {
     return {
       type: 'trailing_stop',
       triggered:
-        position.trailingStop > 0 &&
-        position.currentPrice <= position.trailingStop,
+        parseAmount(position.trailingStop).greaterThan(0) &&
+        parseAmount(position.currentPrice).lessThanOrEqualTo(parseAmount(position.trailingStop)),
       value: position.trailingStop,
     };
   }
 
   private checkTimeExit(position: Position): ExitCondition {
+    // A profitable position is managed by the profit-lock/trailing state
+    // machine. A wall-clock timeout must not liquidate a healthy winner.
+    if (parseAmount(position.currentPrice).greaterThan(parseAmount(position.actualEntryPrice))) {
+      return {
+        type: 'time_exit',
+        triggered: false,
+        value: '0',
+      };
+    }
+
     const holdSeconds =
       (Date.now() - position.entryTime.getTime()) / 1000;
 
     return {
       type: 'time_exit',
       triggered: holdSeconds >= this.config.maxHoldSeconds,
-      value: holdSeconds,
+      value: holdSeconds.toString(),
     };
   }
 
@@ -614,14 +770,14 @@ export class PositionManager {
       ? this.config.hardStopLossPercent
       : 0;
     if (!hard || hard <= 0) {
-      return { type: 'emergency', triggered: false, value: 0 };
+      return { type: 'emergency', triggered: false, value: '0' };
     }
 
-    const lossPercent = ((position.currentPrice - position.actualEntryPrice) / position.actualEntryPrice) * 100;
+    const lossPercent = pctChangeDecimal(position.actualEntryPrice, position.currentPrice);
     return {
       type: 'emergency',
-      triggered: lossPercent <= -Math.abs(hard),
-      value: lossPercent,
+      triggered: lossPercent.lessThanOrEqualTo(-Math.abs(hard)),
+      value: decimalString(lossPercent),
     };
   }
 }
@@ -655,24 +811,26 @@ export function deserializePosition(raw: SerializedPosition): Position {
     // safe defaults so restored positions satisfy strict typing.
     priceHistory: raw.priceHistory ?? [],
     observationPrice:
-      raw.observationPrice ?? raw.signalPrice ?? raw.qualifiedEntryPrice ?? raw.entryPrice ?? raw.actualEntryPrice ?? raw.executionPrice ?? 0,
+      raw.observationPrice ?? raw.signalPrice ?? raw.qualifiedEntryPrice ?? raw.entryPrice ?? raw.actualEntryPrice ?? raw.executionPrice ?? '0',
     signalPrice:
-      raw.signalPrice ?? raw.qualifiedEntryPrice ?? raw.entryPrice ?? raw.observationPrice ?? raw.actualEntryPrice ?? raw.executionPrice ?? 0,
+      raw.signalPrice ?? raw.qualifiedEntryPrice ?? raw.entryPrice ?? raw.observationPrice ?? raw.actualEntryPrice ?? raw.executionPrice ?? '0',
     qualifiedEntryPrice:
-      raw.qualifiedEntryPrice ?? raw.entryPrice ?? raw.signalPrice ?? raw.observationPrice ?? raw.actualEntryPrice ?? raw.executionPrice ?? 0,
+      raw.qualifiedEntryPrice ?? raw.entryPrice ?? raw.signalPrice ?? raw.observationPrice ?? raw.actualEntryPrice ?? raw.executionPrice ?? '0',
     entryPrice:
-      raw.entryPrice ?? raw.qualifiedEntryPrice ?? raw.signalPrice ?? raw.observationPrice ?? raw.actualEntryPrice ?? raw.executionPrice ?? 0,
+      raw.entryPrice ?? raw.qualifiedEntryPrice ?? raw.signalPrice ?? raw.observationPrice ?? raw.actualEntryPrice ?? raw.executionPrice ?? '0',
     actualEntryPrice:
-      raw.actualEntryPrice ?? raw.executionPrice ?? raw.qualifiedEntryPrice ?? raw.entryPrice ?? raw.signalPrice ?? raw.observationPrice ?? 0,
+      raw.actualEntryPrice ?? raw.executionPrice ?? raw.qualifiedEntryPrice ?? raw.entryPrice ?? raw.signalPrice ?? raw.observationPrice ?? '0',
     executionPrice:
-      raw.executionPrice ?? raw.actualEntryPrice ?? raw.qualifiedEntryPrice ?? raw.entryPrice ?? raw.signalPrice ?? raw.observationPrice ?? 0,
+      raw.executionPrice ?? raw.actualEntryPrice ?? raw.qualifiedEntryPrice ?? raw.entryPrice ?? raw.signalPrice ?? raw.observationPrice ?? '0',
     peakPrice:
-      raw.peakPrice ?? raw.currentPrice ?? raw.actualEntryPrice ?? raw.executionPrice ?? raw.qualifiedEntryPrice ?? 0,
+      raw.peakPrice ?? raw.currentPrice ?? raw.actualEntryPrice ?? raw.executionPrice ?? raw.qualifiedEntryPrice ?? '0',
     troughPrice:
-      raw.troughPrice ?? raw.currentPrice ?? raw.actualEntryPrice ?? raw.executionPrice ?? raw.qualifiedEntryPrice ?? 0,
-    mfePct: raw.mfePct ?? 0,
-    maePct: raw.maePct ?? 0,
+      raw.troughPrice ?? raw.currentPrice ?? raw.actualEntryPrice ?? raw.executionPrice ?? raw.qualifiedEntryPrice ?? '0',
+    mfePct: raw.mfePct ?? '0',
+    maePct: raw.maePct ?? '0',
     returns: raw.returns ?? {},
     holdDurationMs: raw.holdDurationMs ?? 0,
   };
 }
+
+

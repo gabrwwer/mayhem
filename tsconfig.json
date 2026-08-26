@@ -17,6 +17,7 @@
     "apps/api/src/**/*.ts",
     "apps/bot/src/**/*.ts",
     "services/*/src/**/*.ts",
-    "tests/**/*"
+    "tests/**/*",
+    "packages/accounting/analytics/index.ts"
   ]
 }

@@ -1,12 +1,15 @@
-import fs from 'node:fs';
-import path from 'node:path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   PriceLifecycleEvent,
   ResearchRecord,
+  EnhancedResearchRecord,
   PerformanceMeasurement,
   MEASUREMENT_WINDOWS_MS,
-  ResearchStatistics,
+  PassingCandidateSnapshot,
+  ForwardObservation,
+  PassingCandidateOutcome,
 } from './research-metrics';
 
 /**
@@ -26,6 +29,9 @@ const log = {
   },
 };
 
+/**
+ * Options for configuring the research recorder.
+ */
 export interface ResearchRecorderOptions {
   filePath?: string;
   dryRun: boolean;
@@ -33,12 +39,17 @@ export interface ResearchRecorderOptions {
 }
 
 /**
- * Collects research data on token price lifecycles without affecting trading logic.
+ * Collects comprehensive research data on token lifecycle and tokenomics.
  *
  * Records:
- * 1. observation/signal/qualification/execution timestamps and prices
- * 2. post-entry price history
- * 3. performance measurements at each window from each lifecycle price
+ * 1. Complete token discovery and identity data
+ * 2. Continuous observation data (price, volume, flow, liquidity, holders, etc.)
+ * 3. Decision points with comprehensive scoring
+ * 4. Simulated execution data with detailed fee/impact analysis
+ * 5. Complete lifecycle with position simulation and outcome data
+ * 6. Specialized events: LP initialization, liquidity events, momentum events,
+ *    graduation, metadata updates, staleness events
+ * 7. Research-specific simulations: position, take-profit, stop-loss, liquidity/risk
  *
  * Writes to JSON Lines format so data survives restarts and can be analyzed
  * independently of trading decisions.
@@ -80,7 +91,7 @@ export class ResearchRecorder {
   /**
    * Record a complete token lifecycle with post-entry performance metrics.
    *
-   * Never throws; research failures must not interfere with trading.
+   * Enhanced to work with both legacy ResearchRecord and EnhancedResearchRecord formats.
    */
   recordLifecycle(
     tokenMint: string,
@@ -92,7 +103,7 @@ export class ResearchRecorder {
     if (this.failed) return;
 
     const history = priceHistory ?? [];
-    const record = this.buildRecord(
+    const record = this.buildLegacyRecord(
       tokenMint,
       lifecycle,
       positionOpened,
@@ -104,32 +115,309 @@ export class ResearchRecorder {
     this.enqueueWrite(line);
   }
 
-  recordDiscovery(record: Record<string, unknown>): void {
-    this.recordTypedEvent('DISCOVERY', record);
-  }
-
-  recordObservation(record: Record<string, unknown>): void {
-    this.recordTypedEvent('OBSERVATION', record);
-  }
-
-  recordDecision(record: Record<string, unknown>): void {
-    this.recordTypedEvent('DECISION', record);
-  }
-
-  recordOutcome(record: Record<string, unknown>): void {
-    this.recordTypedEvent('OUTCOME', record);
-  }
-
-  recordExecution(record: Record<string, unknown>): void {
-    this.recordTypedEvent('EXECUTION', record);
+  /**
+   * Record an enhanced research record with comprehensive tokenomics data.
+   *
+   * This is the primary method for capturing the full research taxonomy.
+   */
+  recordEnhancedRecord(record: EnhancedResearchRecord): void {
+    this.recordTypedEnhancedEvent(record.recordType, record as unknown as Record<string, unknown>);
   }
 
   /**
-   * Record a non-position research observation, such as discovery, execution, or momentum
-   * sampling data. Missing values are kept as null and duplicate event IDs are
-   * dropped to prevent repeated internal events from being written twice.
+   * Record initial token discovery with comprehensive identity data.
+   *
+   * Called for every unique token discovered on-chain.
    */
-  private recordTypedEvent(recordType: 'DISCOVERY' | 'OBSERVATION' | 'DECISION' | 'EXECUTION' | 'OUTCOME', record: Record<string, unknown>): void {
+  recordDiscovery(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('DISCOVERY', {
+      ...record,
+      // Ensure required fields are present
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2, // Enhanced schema version
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'DISCOVERY',
+      event: record['event'] ?? 'TOKEN_DISCOVERED',
+    });
+  }
+
+  /**
+   * Record continuous observation data (price, volume, flow, etc.) sampled over time.
+   *
+   * Called periodically during token evaluation windows.
+   */
+  recordObservation(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('OBSERVATION', {
+      ...record,
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'OBSERVATION',
+      event: record['event'] ?? 'CONTINUOUS_OBSERVATION',
+    });
+  }
+
+  /**
+   * Record a decision point (BUY, REJECT, QUALIFIED, etc.) with comprehensive scoring.
+   */
+  recordDecision(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('DECISION', {
+      ...record,
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'DECISION',
+      event: record['event'] ?? 'DECISION_POINT',
+    });
+  }
+
+  /**
+   * Record a passing candidate snapshot - captured when token passes risk+momentum gates
+   */
+  recordPassingCandidateSnapshot(snapshot: Partial<PassingCandidateSnapshot>): void {
+    this.recordTypedEnhancedEvent('PASSING_CANDIDATE_FORWARD_OUTCOME', {
+      ...snapshot,
+      recordId: `passing-candidate:${snapshot['tokenMint'] ?? 'unknown'}:${snapshot['timestamp'] ?? Date.now()}`,
+      schemaVersion: 2,
+      recordedAt: new Date().toISOString(),
+      recordType: 'PASSING_CANDIDATE_FORWARD_OUTCOME',
+      event: 'PASSING_CANDIDATE_SNAPSHOT',
+    });
+  }
+
+  /**
+   * Record a forward observation for a passing candidate
+   */
+  recordPassingCandidateObservation(observation: Partial<ForwardObservation>): void {
+    this.recordTypedEnhancedEvent('PASSING_CANDIDATE_FORWARD_OUTCOME', {
+      ...observation,
+      recordId: `forward-obs:${observation['tokenMint'] ?? 'unknown'}:${observation['observationTime'] ?? Date.now()}`,
+      schemaVersion: 2,
+      recordedAt: new Date().toISOString(),
+      recordType: 'PASSING_CANDIDATE_FORWARD_OUTCOME',
+      event: 'FORWARD_OBSERVATION',
+    });
+  }
+
+  /**
+   * Record a complete passing candidate outcome (snapshot + all observations)
+   */
+  recordPassingCandidateOutcome(outcome: Partial<PassingCandidateOutcome>): void {
+    // First record the snapshot
+    this.recordPassingCandidateSnapshot(outcome.snapshot as Partial<PassingCandidateSnapshot>);
+
+    // Then record each observation
+    for (const observation of outcome.observations ?? []) {
+      this.recordPassingCandidateObservation(observation as Partial<ForwardObservation>);
+    }
+
+    // Finally, record the outcome summary
+    this.recordTypedEnhancedEvent('PASSING_CANDIDATE_OUTCOME', {
+      ...outcome,
+      recordId: `passing-outcome:${outcome.snapshot?.tokenMint ?? 'unknown'}:${outcome.snapshot?.timestamp ?? Date.now()}`,
+      schemaVersion: 2,
+      recordedAt: new Date().toISOString(),
+      recordType: 'PASSING_CANDIDATE_OUTCOME',
+      event: 'PASSING_CANDIDATE_OUTCOME_SUMMARY',
+    });
+  }
+
+  /**
+   * Record the outcome of a completed position (simulated or actual).
+   */
+  recordOutcome(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('OUTCOME', {
+      ...record,
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'OUTCOME',
+      event: record['event'] ?? 'POSITION_OUTCOME',
+    });
+  }
+
+  /**
+   * Record a simulated execution attempt (for DRY_RUN research).
+   */
+  recordExecution(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('EXECUTION', {
+      ...record,
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'EXECUTION',
+      event: record['event'] ?? 'EXECUTION_ATTEMPT',
+    });
+  }
+
+  /**
+   * Record LP initialization/event data.
+   */
+  recordLpInitialization(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('LP_INITIALIZATION', {
+      ...record,
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'LP_INITIALIZATION',
+      event: record['event'] ?? 'LP_INITIALIZATION_EVENT',
+    });
+  }
+
+  /**
+   * Record liquidity change events.
+   */
+  recordLiquidityEvent(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('LIQUIDITY_EVENT', {
+      ...record,
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'LIQUIDITY_EVENT',
+      event: record['event'] ?? 'LIQUIDITY_CHANGE',
+    });
+  }
+
+  /**
+   * Record specialized momentum events (e.g., momentum state changes).
+   */
+  recordMomentumEvent(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('MOMENTUM_EVENT', {
+      ...record,
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'MOMENTUM_EVENT',
+      event: record['event'] ?? 'MOMENTUM_STATE_CHANGE',
+    });
+  }
+
+  /**
+   * Record graduation/migration events.
+   */
+  recordGraduation(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('GRADUATION', {
+      ...record,
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'GRADUATION',
+      event: record['event'] ?? 'GRADUATION_EVENT',
+    });
+  }
+
+  /**
+   * Record metadata updates (name changes, social links, etc.).
+   */
+  recordMetadataUpdate(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('METADATA_UPDATE', {
+      ...record,
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'METADATA_UPDATE',
+      event: record['event'] ?? 'METADATA_UPDATE',
+    });
+  }
+
+  /**
+   * Record staleness detection events.
+   */
+  recordStaleEvent(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('STALE_EVENT', {
+      ...record,
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'STALE_EVENT',
+      event: record['event'] ?? 'STALENESS_DETECTION',
+    });
+  }
+
+  /**
+   * Record position simulation data (for hypothetical positions).
+   */
+  recordPositionSimulation(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('POSITION_SIMULATION', {
+      ...record,
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'POSITION_SIMULATION',
+      event: record['event'] ?? 'POSITION_SIMULATION_DATA',
+    });
+  }
+
+  /**
+   * Record take-profit research data.
+   */
+  recordTakeProfitResearch(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('TAKE_PROFIT_RESEARCH', {
+      ...record,
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'TAKE_PROFIT_RESEARCH',
+      event: record['event'] ?? 'TP_RESEARCH_DATA',
+    });
+  }
+
+  /**
+   * Record stop-loss research data.
+   */
+  recordStopLossResearch(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('STOP_LOSS_RESEARCH', {
+      ...record,
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'STOP_LOSS_RESEARCH',
+      event: record['event'] ?? 'SL_RESEARCH_DATA',
+    });
+  }
+
+  /**
+   * Record liquidity/execution risk analysis.
+   */
+  recordLiquidityExecutionRisk(record: Record<string, unknown>): void {
+    this.recordTypedEnhancedEvent('LIQUIDITY_EXECUTION_RISK', {
+      ...record,
+      recordId: record['recordId'] ?? randomUUID(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
+      recordType: 'LIQUIDITY_EXECUTION_RISK',
+      event: record['event'] ?? 'LIQUIDITY_RISK_ANALYSIS',
+    });
+  }
+
+  /**
+   * Record a non-position research observation with enhanced typing.
+   *
+   * Handles deduplication for internal events while allowing multiple
+   * observations of the same token at different times.
+   */
+  private recordTypedEnhancedEvent(
+    recordType:
+      | 'DISCOVERY'
+      | 'OBSERVATION'
+      | 'DECISION'
+      | 'EXECUTION'
+      | 'OUTCOME'
+      | 'LP_INITIALIZATION'
+      | 'LIQUIDITY_EVENT'
+      | 'MOMENTUM_EVENT'
+      | 'GRADUATION'
+      | 'METADATA_UPDATE'
+      | 'STALE_EVENT'
+      | 'POSITION_SIMULATION'
+      | 'TAKE_PROFIT_RESEARCH'
+      | 'STOP_LOSS_RESEARCH'
+      | 'LIQUIDITY_EXECUTION_RISK'
+      | 'EXIT_DECISION'
+      | 'PASSING_CANDIDATE_FORWARD_OUTCOME'
+      | 'PASSING_CANDIDATE_OUTCOME',
+    record: Record<string, unknown>
+  ): void {
     if (this.failed) {
       log.info('RESEARCH_RECORD_ATTEMPT', {
         type: recordType,
@@ -146,17 +434,18 @@ export class ResearchRecorder {
       filePath: this.filePath,
     });
 
+    // Normalize the record for storage
     const normalized = this.normalizeJsonRecord({
       recordId: record['recordId'] ?? randomUUID(),
-      schemaVersion: 1,
-      recordedAt: new Date().toISOString(),
+      schemaVersion: record['schemaVersion'] ?? 2,
+      recordedAt: record['recordedAt'] ?? new Date().toISOString(),
       recordType,
       ...(record['event'] ? { event: record['event'] } : {}),
       ...record,
     });
 
     try {
-      this.validateResearchRecord(normalized as Record<string, unknown>);
+      this.validateEnhancedResearchRecord(normalized as Record<string, unknown>);
     } catch (validationError) {
       log.error('RESEARCH_RECORD_VALIDATION_FAILED', {
         type: recordType,
@@ -166,17 +455,29 @@ export class ResearchRecorder {
       return;
     }
 
-    const identity = this.eventIdentity(normalized as Record<string, unknown>);
-    if (identity && this.seenRecordKeys.has(identity)) {
-      log.info('RESEARCH_RECORD_DEDUPLICATED', {
-        type: recordType,
-        mint: record['tokenMint'] ?? record['mint'],
-        identity,
-      });
-      return;
-    }
+    // Enhanced deduplication strategy:
+    // - For DISCOVERY: deduplicate by mint (should only discover once)
+    // - For OUTCOME: deduplicate by positionId (should only have one outcome per position)
+    // - For others: allow multiple records per token (observations, decisions, etc.)
+    //   but deduplicate exact duplicates by mint+event+timestamp+recordId
+    let shouldDeduplicate = false;
+    const identity = this.enhancedEventIdentity(normalized as Record<string, unknown>);
+
     if (identity) {
-      this.seenRecordKeys.add(identity);
+      if (this.seenRecordKeys.has(identity)) {
+        shouldDeduplicate = true;
+        log.info('RESEARCH_RECORD_DEDUPLICATED', {
+          type: recordType,
+          mint: record['tokenMint'] ?? record['mint'],
+          identity,
+        });
+      } else {
+        this.seenRecordKeys.add(identity);
+      }
+    }
+
+    if (shouldDeduplicate) {
+      return;
     }
 
     log.info('RESEARCH_WRITE_ENQUEUED', {
@@ -189,9 +490,16 @@ export class ResearchRecorder {
     this.enqueueWrite(`${JSON.stringify(normalized)}\n`);
   }
 
-  private eventIdentity(record: Record<string, unknown>): string | null {
+  /**
+   * Generate identity for deduplication logic.
+   *
+   * Different strategies for different record types to balance
+   * deduplication needs with allowing multiple observations.
+   */
+  private enhancedEventIdentity(record: Record<string, unknown>): string | null {
     const mint = typeof record['mint'] === 'string' ? record['mint'] : typeof record['tokenMint'] === 'string' ? record['tokenMint'] : null;
     const event = typeof record['event'] === 'string' ? record['event'] : null;
+    const positionId = typeof record['positionId'] === 'string' ? record['positionId'] : null;
     const signature = typeof record['signature'] === 'string'
       ? record['signature']
       : typeof record['txSignature'] === 'string'
@@ -201,6 +509,31 @@ export class ResearchRecorder {
     const ts = typeof record['timestamp'] === 'string' ? record['timestamp'] : typeof record['recordedAt'] === 'string' ? record['recordedAt'] : null;
     const recordId = typeof record['recordId'] === 'string' ? record['recordId'] : null;
 
+    // Special handling for different types to balance deduplication needs
+    if (type === 'DISCOVERY') {
+      // Only one discovery per token - deduplicate by mint
+      return mint ? `DISCOVERY:${mint}` : null;
+    }
+
+    if (type === 'OUTCOME') {
+      // Only one outcome per position - deduplicate by positionId
+      return positionId ? `OUTCOME:${positionId}` : null;
+    }
+
+    if (type === 'POSITION_SIMULATION') {
+      // Simplified for clarity - in reality would have more sophisticated logic
+      return positionId ? `POSITION_SIM:${positionId}` : null;
+    }
+
+    if (type === 'EXIT_DECISION') {
+      // For exit decisions, deduplicate by positionId + timestamp to allow multiple exit decisions per position
+      // but prevent exact duplicates
+      if (positionId && ts) return `${type}:${positionId}:${ts}`;
+      if (positionId && recordId) return `${type}:${positionId}:${recordId}`;
+    }
+
+    // For most other types, use comprehensive identity to allow multiple records per token
+    // but prevent exact duplicates
     if (!type) return null;
     if (mint && event) return `${type}:${mint}:${event}`;
     if (mint && recordId) return `${type}:${mint}:${recordId}`;
@@ -256,8 +589,8 @@ export class ResearchRecorder {
     }
 
     if (Array.isArray(value)) {
-      throw new Error('Research records must not contain arrays.');
-    }
+  return value.map((entry) => this.normalizeJsonRecord(entry));
+  }
 
     if (value !== null && typeof value === 'object') {
       const normalized: Record<string, unknown> = {};
@@ -285,31 +618,43 @@ export class ResearchRecorder {
     return value;
   }
 
-  private validateResearchRecord(record: Record<string, unknown>): void {
+  private validateEnhancedResearchRecord(record: Record<string, unknown>): void {
     if (!record || typeof record !== 'object' || Array.isArray(record)) {
       throw new Error('Research record must be a JSON object.');
     }
 
-    if (record['schemaVersion'] !== 1) {
-      throw new Error('Research record schemaVersion must be 1.');
+    if (record['schemaVersion'] !== 1 && record['schemaVersion'] !== 2) {
+      throw new Error('Research record schemaVersion must be 1 or 2.');
     }
 
     const type = record['recordType'];
-    if (typeof type !== 'string' || !['DISCOVERY', 'OBSERVATION', 'DECISION', 'EXECUTION', 'OUTCOME'].includes(type)) {
-      throw new Error(`Research recordType must be one of DISCOVERY, OBSERVATION, DECISION, EXECUTION, OUTCOME: ${String(type)}`);
-    }
+if (typeof type !== 'string' || ![
+  'DISCOVERY', 'OBSERVATION', 'DECISION', 'EXECUTION', 'OUTCOME',
+  'LP_INITIALIZATION', 'LIQUIDITY_EVENT', 'MOMENTUM_EVENT', 'GRADUATION',
+  'METADATA_UPDATE', 'STALE_EVENT', 'POSITION_SIMULATION',
+  'TAKE_PROFIT_RESEARCH', 'STOP_LOSS_RESEARCH', 'LIQUIDITY_EXECUTION_RISK',
+  'PASSING_CANDIDATE_FORWARD_OUTCOME',
+].includes(type)) {
+  throw new Error(`Research recordType must be one of the supported types: ${String(type)}`);
+}
 
     if (typeof record['recordedAt'] !== 'string' || Number.isNaN(Date.parse(record['recordedAt'] as string))) {
       throw new Error('Research record recordedAt must be a valid ISO timestamp.');
     }
 
     const mint = typeof record['mint'] === 'string' ? record['mint'] : typeof record['tokenMint'] === 'string' ? record['tokenMint'] : null;
-    if (!mint && type !== 'OUTCOME') {
+    // For most types we require a token identifier, but some legacy types might not have it
+    // Still require it for the main enhanced types
+    const requiresMint = ![
+      'OUTCOME' // Outcomes reference positionId instead
+    ].includes(type);
+
+    if (requiresMint && !mint) {
       throw new Error('Research record requires a mint or tokenMint.');
     }
   }
 
-  private buildRecord(
+  private buildLegacyRecord(
     tokenMint: string,
     lifecycle: PriceLifecycleEvent,
     positionOpened: boolean,

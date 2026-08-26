@@ -23,6 +23,11 @@ import {
   type PriceSample,
   type SignalThresholds,
 } from './momentum-signal';
+import {
+  PassingCandidateSnapshot,
+  ForwardObservation,
+  PassingCandidateOutcome
+} from '@mayhem/trading-engine';
 
 /**
  * Result of the observation window. `confirmed` drives the entry decision; the
@@ -388,14 +393,14 @@ type RuntimeConfig = BotConfig & {
   MAX_ENTRY_PRICE_IMPACT_BPS: number;
   MAX_QUOTE_AGE_MS: number;
   // Early-flow mode parameters
-  MAYHEM_ENTRY_MODE?: 'EARLY_FLOW' | 'MOMENTUM';
+  ENTRY_MODE?: 'EARLY_FLOW' | 'MOMENTUM';
   EARLY_FLOW_WINDOW_MS?: number;
   EARLY_FLOW_SAMPLE_INTERVAL_MS?: number;
   MIN_EARLY_FLOW_SAMPLES?: number;
   MAX_EARLY_FLOW_SAMPLES?: number;
   MIN_NET_FLOW_PCT?: number;
   MAX_EARLY_VOLATILITY?: number;
-  MAX_EARLY_DRAW_DOWN_PCT?: number;
+  MAX_EARLY_DRAWDOWN_PCT?: number;
   MIN_UNIQUE_BUYERS?: number;
   MIN_BUY_TRANSACTIONS?: number;
   MIN_CURVE_DEPTH_SOL?: number;
@@ -436,6 +441,17 @@ export class NewLaunchHandler {
 
   /** Mints holding an open position: mint -> positionId. */
   private readonly openMints = new Map<string, string>();
+
+  /** Active passing candidate observations: mint -> observation state */
+  private readonly passingCandidateObservations = new Map<string, {
+    snapshot: PassingCandidateSnapshot;
+    observations: ForwardObservation[];
+    priceSamples: { price: number; timestamp: number }[]; // For MFE/MAE calculation
+    timers: NodeJS.Timeout[];
+    sampleTimer: NodeJS.Timeout | null;
+    resolve: (value: PassingCandidateOutcome | PromiseLike<PassingCandidateOutcome>) => void;
+    reject: (reason?: any) => void;
+  }>();
 
   constructor(
     mayhemEngine: MayhemEngine,
@@ -568,7 +584,7 @@ export class NewLaunchHandler {
        * after launch, which is a different trade than the one the strategy
        * describes — better to decline it and say so than to take it late.
        */
-      const evaluationCap = this.config.MAX_CONCURRENT_EVALUATIONS ?? 3;
+      const evaluationCap = this.config.MAX_CONCURRENT_EVALUATIONS!;
       if (this.inFlightEvaluations >= evaluationCap) {
         return this.reject(
           candidate,
@@ -619,7 +635,7 @@ export class NewLaunchHandler {
 
       const risk = await this.riskGate.assess(riskInput);
 
-      const minRiskScore = this.config.MIN_RISK_SCORE ?? 80;
+      const minRiskScore = this.config.MIN_RISK_SCORE ?? 70;
 
       if (
         !risk.canTrade ||
@@ -737,6 +753,87 @@ export class NewLaunchHandler {
         'REJECTED_MOMENTUM',
         momentumTelemetry,
       );
+    }
+
+    // Check if this is a passing candidate (passed risk and momentum gates)
+// Note: We already know risk.level is not 'HIGH_RISK' or 'BLOCKED' from the risk check above
+    const isPassingCandidate = risk.canTrade &&
+      Number.isFinite(risk.score) &&
+      risk.score >= minRiskScore &&
+      momentum.confirmed;
+
+    // --------------------------------------------------------
+    // PASSING CANDIDATE RESEARCH
+    //
+    // IMPORTANT:
+    // This MUST execute before the TRADING_ENABLED monitor-only
+    // return. Otherwise naturally passing candidates disappear
+    // from the forward-outcome dataset whenever trading is
+    // disabled.
+    //
+    // Research definition:
+    //   risk.canTrade
+    //   AND risk.score >= minRiskScore
+    //   AND momentum.confirmed
+    //
+    // This is observation-only and never executes a trade.
+    // --------------------------------------------------------
+    if (isPassingCandidate) {
+      candidate.passingCandidateData = {
+        riskScore: risk.score,
+        momentumConfirmed: momentum.confirmed,
+        riskLevel: risk.level
+      };
+
+      try {
+        const passingSnapshot: Partial<PassingCandidateSnapshot> = {
+          tokenMint: event.tokenMint,
+          price: momentum.finalPrice,
+          liquiditySol: 0,
+          depthSol: 0,
+          riskScore: risk.score,
+          momentumConfirmed: momentum.confirmed,
+
+          // These values are intentionally populated only when
+          // available at this stage. Do not fabricate market data.
+          volume24h: 0,
+          volumeChange5m: 0,
+          buyPressure: momentum.buyPressure,
+          sellPressure: 0,
+          flowBuyPressure: momentum.flowBuyPressure,
+
+          holderCount: 0,
+          holderGrowth1h: 0,
+
+          tradeCount: momentum.samples,
+          uniqueTraders: 0,
+          uniqueBuyers: 0,
+          uniqueSellers: 0,
+
+          volatility: momentum.volatility,
+          priceChange5m: 0,
+
+          quoteAgeMs: 0,
+          priceImpactBps: 0,
+
+          source: event.source,
+          isPumpFun: !!event.isPumpFun
+        };
+
+        void this.startPassingCandidateObservation(
+          candidate,
+          passingSnapshot
+        );
+      } catch (error) {
+        logger.warn('PASSING_CANDIDATE_OBSERVATION_START_FAILED', {
+          mint: event.tokenMint,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+
+      // Observation owns the forward chain now. Remove the temporary
+      // marker so downstream entry logic cannot start a duplicate chain.
+      delete candidate.passingCandidateData;
     }
 
     if (!this.config.TRADING_ENABLED) {
@@ -873,8 +970,11 @@ export class NewLaunchHandler {
 
       const signal = this.mayhemEngine.evaluateToken(
         event.tokenMint,
-        momentum.finalPrice,
-        depthSol,
+        String(momentum.finalPrice),
+        // Depth is currently supplied by the legacy monitor as a number.
+        // Convert at this adapter boundary; MayhemEngine itself only accepts
+        // exact decimal strings and performs no financial number arithmetic.
+        String(depthSol),
         risk.score,
         { depthMeasured },
       );
@@ -887,6 +987,7 @@ export class NewLaunchHandler {
           { mint: event.tokenMint },
         );
       }
+
 
       // Record the BUY decision in the research dataset
       // This captures the exact moment and conditions under which we approved entry
@@ -929,41 +1030,94 @@ export class NewLaunchHandler {
 
       const position = await this.mayhemEngine.executeEntry(signal);
 
-      if (!position) {
-        this.candidateManager.transition(
-          candidate,
-          'FAILED',
-          'execution returned no confirmed position',
-        );
+if (!position) {
+  this.candidateManager.transition(
+    candidate,
+    'FAILED',
+    'execution returned no confirmed position',
+  );
 
-        logger.warn('ENTRY_FAILED', {
-          candidateId: candidate.id,
-          mint: event.tokenMint,
-        });
+  logger.warn('ENTRY_FAILED', {
+    candidateId: candidate.id,
+    mint: event.tokenMint,
+  });
 
-        return;
-      }
+  return;
+}
 
-      // Record the open position BEFORE any further bookkeeping. If a
-      // later statement throws, the `finally` block must still see that a
-      // position exists — otherwise it releases the mint reservation while
-      // capital is committed, and the next discovery event for this mint
-      // opens a second position on top of the first.
-      openedPositionId = position.id;
+// ============================================================================
+// CRITICAL: ALL bookkeeping must be atomic. If ANY step fails after
+// position is confirmed on-chain, the position MUST be visible in DB
+// with consistent candidate state. Otherwise: orphaned position + double entry.
+// ============================================================================
 
-      this.candidateManager.transition(candidate, 'OPEN', 'entry confirmed');
-      candidate.positionId = position.id;
+try {
+  // Step 1: Transition candidate state FIRST (this is the "commit point")
+  this.candidateManager.transition(candidate, 'OPEN', 'entry confirmed');
 
-      logger.info('ENTRY_OPENED', {
-        candidateId: candidate.id,
-        positionId: position.id,
-        mint: position.tokenMint,
-        entry: position.actualEntryPrice,
-        amount: signal.amount,
-        liquidity,
-        riskScore: risk.score,
-        source: event.source,
-      });
+  // Step 2: Assign position ID (idempotent — safe to retry)
+  candidate.positionId = position.id;
+
+  // Step 3: Record entry in research log (best-effort; failure is non-fatal)
+  try {
+    logger.info('ENTRY_OPENED', {
+      candidateId: candidate.id,
+      positionId: position.id,
+      mint: position.tokenMint,
+      entry: position.actualEntryPrice,
+      amount: signal.amount,
+      liquidity,
+      riskScore: risk.score,
+      source: event.source,
+    });
+  } catch (logError) {
+    logger.error('ENTRY_OPENED_LOG_FAILED', {
+      positionId: position.id,
+      error: this.toErrorMessage(logError),
+    });
+    // Do NOT re-throw; logging failure must not orphan the position
+  }
+
+  // Mark position ID as opened (do this LAST, after all bookkeeping succeeds)
+  openedPositionId = position.id;
+
+} catch (bookkeepingError) {
+  // ==========================================================================
+  // If we reach here, the position exists on-chain but bookkeeping failed.
+  // We MUST log this clearly and let the position be released + manually
+  // reconciled, because we don't know the partial state.
+  // ==========================================================================
+
+  logger.error('ENTRY_BOOKKEEPING_FAILED_POSITION_ORPHANED', {
+    positionId: position.id,
+    mint: event.tokenMint,
+    candidateId: candidate.id,
+    error: this.toErrorMessage(bookkeepingError),
+    action: 'MANUAL_REVIEW_REQUIRED: position exists on-chain but DB state is inconsistent',
+  });
+
+  // Mark the candidate as failed so duplicate protection doesn't fire
+  try {
+    this.candidateManager.transition(
+      candidate,
+      'FAILED',
+      'bookkeeping failure after fill',
+    );
+  } catch (transitionError) {
+    logger.error('CANDIDATE_TRANSITION_FAILED_AFTER_ORPHAN', {
+      candidateId: candidate.id,
+      error: this.toErrorMessage(transitionError),
+    });
+  }
+
+  // DO NOT set openedPositionId — allow the finally block to release the mint
+  // so a manual recovery can re-enter without duplicate protection blocking.
+  // The position will be orphaned but visible in logs for audit/recovery.
+
+  throw bookkeepingError;
+}
+
+
     } catch (error) {
       if (candidate) {
         this.safeFailCandidate(candidate, 'unhandled candidate lifecycle error');
@@ -1008,7 +1162,7 @@ export class NewLaunchHandler {
 
   /** Mints currently holding an open position. */
   getOpenMints(): string[] {
-    return [...this.openMints.keys()];
+    return Array.from(this.openMints.keys());
   }
 
   async handleMempoolSnipe(event: PendingLpEvent): Promise<void> {
@@ -1121,8 +1275,8 @@ export class NewLaunchHandler {
   }
 
   private isValidQuote(quote: ExecutableQuote): boolean {
-    const maxQuoteAgeMs = (this.config as any).MAX_QUOTE_AGE_MS ?? 5_000;
-    const maxPriceImpactBps = (this.config as any).MAX_ENTRY_PRICE_IMPACT_BPS ?? 500;
+    const maxQuoteAgeMs = (this.config as any).MAX_QUOTE_AGE_MS ?? 750;
+    const maxPriceImpactBps = (this.config as any).MAX_ENTRY_PRICE_IMPACT_BPS ?? 750;
     const quoteAgeMs = Date.now() - quote.timestamp;
 
     return (
@@ -1157,16 +1311,16 @@ export class NewLaunchHandler {
       return { ...emptyMomentumOutcome(initialPrice, 'momentum confirmation disabled'), confirmed: true };
     }
 
-    const durationMs = this.config.MOMENTUM_CONFIRM_DURATION_MS ?? 60_000;
-    const intervalMs = this.config.MOMENTUM_CONFIRM_INTERVAL_MS ?? 2_000;
+    const durationMs = this.config.MOMENTUM_CONFIRM_DURATION_MS!;
+    const intervalMs = this.config.MOMENTUM_CONFIRM_INTERVAL_MS!;
 
     const thresholds: SignalThresholds = {
-      minSamples: this.config.MIN_MOMENTUM_SAMPLES ?? 10,
-      minBuyPressure: this.config.MIN_BUY_PRESSURE ?? 0.65,
-      minNetFlowPct: this.config.MIN_MOMENTUM_CHANGE_PCT ?? 2,
-      maxVolatility: this.config.MAX_MOMENTUM_VOLATILITY ?? 0.5,
-      maxDrawdownPct: this.config.MAX_MOMENTUM_DRAWDOWN_PCT ?? 10,
-      maxFlatRatio: this.config.MAX_FLAT_RATIO ?? 0.8,
+      minSamples: this.config.MIN_MOMENTUM_SAMPLES!,
+      minBuyPressure: this.config.MIN_BUY_PRESSURE!,
+      minNetFlowPct: this.config.MIN_MOMENTUM_CHANGE_PCT!,
+      maxVolatility: this.config.MAX_MOMENTUM_VOLATILITY!,
+      maxDrawdownPct: this.config.MAX_MOMENTUM_DRAWDOWN_PCT!,
+      maxFlatRatio: this.config.MAX_FLAT_RATIO!,
     };
 
     /*
@@ -1266,11 +1420,11 @@ export class NewLaunchHandler {
 
     const thresholds: SignalThresholds = {
       minSamples,
-      minBuyPressure: this.config.MIN_BUY_PRESSURE ?? 0.55,
-      minNetFlowPct: this.config.MIN_NET_FLOW_PCT ?? 5,
-      maxVolatility: this.config.MAX_EARLY_VOLATILITY ?? 0.5,
-      maxDrawdownPct: this.config.MAX_EARLY_DRAW_DOWN_PCT ?? 15,
-      maxFlatRatio: this.config.MAX_FLAT_RATIO ?? 0.6,
+      minBuyPressure: this.config.MIN_BUY_PRESSURE!,
+      minNetFlowPct: this.config.MIN_NET_FLOW_PCT!,
+      maxVolatility: this.config.MAX_EARLY_VOLATILITY!,
+      maxDrawdownPct: this.config.MAX_EARLY_DRAWDOWN_PCT!,
+      maxFlatRatio: this.config.MAX_FLAT_RATIO!,
     };
 
     const thresholdProblems = validateThresholds(thresholds);
@@ -1295,7 +1449,7 @@ export class NewLaunchHandler {
 
     // Hard-required data checks. If any are missing, record DATA_INSUFFICIENT
     // and do not attempt an entry.
-    const maxQuoteAgeMs = this.config.MAX_QUOTE_AGE_MS ?? 1000;
+    const maxQuoteAgeMs = this.config.MAX_QUOTE_AGE_MS ?? 750;
     const minCurveDepth = this.config.MIN_CURVE_DEPTH_SOL ?? 3;
     const requiredProblems: string[] = [];
 
@@ -1369,12 +1523,13 @@ export class NewLaunchHandler {
     const clamp = (v: number, a = 0, b = 1) => Math.max(a, Math.min(b, v));
 
     const flowBuy = metrics?.flowBuyPressure ?? 0; // 0..1
-    const flowScore = clamp((flowBuy - (this.config.MIN_BUY_PRESSURE ?? 0.55)) / (1 - (this.config.MIN_BUY_PRESSURE ?? 0.55)));
+    const minBuyPressure = this.config.MIN_BUY_PRESSURE!;
+    const flowScore = clamp((flowBuy - minBuyPressure) / (1 - minBuyPressure));
     const velocity = Math.min(200, Math.abs(metrics?.flowRatePerMin ?? 0)) / 200; // heuristic
     const velocityScore = clamp(velocity);
     const depthScore = clamp(curveDepth / 10); // 10 SOL+ is good
     const priceScore = clamp(((metrics?.netFlowPct ?? 0) + 20) / 40); // -20..+20 map to 0..1
-    const drawdownScore = 1 - clamp((metrics?.finalDrawdownPct ?? 100) / (this.config.MAX_EARLY_DRAW_DOWN_PCT ?? 15));
+    const drawdownScore = 1 - clamp((metrics?.finalDrawdownPct ?? 100) / (this.config.MAX_EARLY_DRAWDOWN_PCT!));
     const executionScore = lastQuote ? clamp(1 - (lastQuote.priceImpactBps / ((this.config.MAX_ENTRY_PRICE_IMPACT_BPS ?? 750) + 1))) : 0.5;
     const buyerGrowthScore = 0.5; // placeholder until buyer metrics implemented
 
@@ -1384,10 +1539,10 @@ export class NewLaunchHandler {
 
     const gateViolations: string[] = [];
     if (!lastQuote) gateViolations.push('NO_QUOTE');
-    if (lastQuote && Date.now() - lastQuote.timestamp > (this.config.MAX_QUOTE_AGE_MS ?? 1000)) gateViolations.push('STALE_QUOTE');
+    if (lastQuote && Date.now() - lastQuote.timestamp > (this.config.MAX_QUOTE_AGE_MS ?? 750)) gateViolations.push('STALE_QUOTE');
     if (lastQuote && lastQuote.priceImpactBps > (this.config.MAX_ENTRY_PRICE_IMPACT_BPS ?? 750)) gateViolations.push('EXCESSIVE_PRICE_IMPACT');
     if (curveDepth <= 0) gateViolations.push('UNKNOWN_CURVE_DEPTH');
-    if (metrics && metrics.finalDrawdownPct > (this.config.MAX_EARLY_DRAW_DOWN_PCT ?? 15)) gateViolations.push('EXCESSIVE_DRAWDOWN');
+    if (metrics && metrics.finalDrawdownPct > (this.config.MAX_EARLY_DRAWDOWN_PCT!)) gateViolations.push('EXCESSIVE_DRAWDOWN');
 
     const confirmed = result.confirmed && gateViolations.length === 0 && opportunityScore >= (this.config.MIN_OPPORTUNITY_SCORE ?? 75);
 
@@ -1482,6 +1637,9 @@ export class NewLaunchHandler {
     logEvent: string,
     context: Record<string, unknown>,
   ): void {
+    // Clean up any passing candidate observation data to prevent memory leaks
+    this.cleanupPassingCandidateData(candidate);
+
     this.candidateManager.reject(candidate, reason);
 
     logger.info(logEvent, {
@@ -1529,6 +1687,9 @@ export class NewLaunchHandler {
   }
 
   private safeFailCandidate(candidate: Candidate, reason: string): void {
+    // Clean up any passing candidate observation data to prevent memory leaks
+    this.cleanupPassingCandidateData(candidate);
+
     try {
       this.candidateManager.transition(candidate, 'FAILED', reason);
     } catch (error) {
@@ -1540,6 +1701,454 @@ export class NewLaunchHandler {
     }
   }
 
+  /**
+   * Clean up any passing candidate observation data for a candidate
+   * Called when a candidate is rejected or fails to prevent memory leaks
+   */
+  private cleanupPassingCandidateData(candidate: Candidate): void {
+    // Clean up temporary flag
+    if (candidate.passingCandidateData) {
+      delete candidate.passingCandidateData;
+    }
+
+    // Clean up observation state if it exists
+    const observationState = this.passingCandidateObservations.get(candidate.tokenMint);
+    if (observationState) {
+      // Clear all timers
+      observationState.timers.forEach(timer => clearTimeout(timer));
+      this.passingCandidateObservations.delete(candidate.tokenMint);
+    }
+  }
+
+  /**
+   * Start passive forward observation for a passing candidate
+   * Records snapshot and schedules observations at 5s, 15s, 30s, 60s intervals
+   * Tracking: entryPrice, entryTimestamp, price5s, price15s, price30s, price60s,
+   * peakPrice, maxGainPct, maxDrawdownPct, finalPrice, finalReturnPct, outcome
+   */
+  private async startPassingCandidateObservation(
+    candidate: Candidate,
+    snapshotData: Partial<PassingCandidateSnapshot>
+  ): Promise<void> {
+    // Avoid duplicate observation chains for the same candidate.
+    if (this.passingCandidateObservations.has(candidate.tokenMint)) {
+      return;
+    }
+
+    // Research observation points.
+    //
+    // IMPORTANT:
+    // There is intentionally NO 1-second RPC polling loop here.
+    //
+    // Each observation performs exactly ONE getValidatedQuote() call.
+    // That quote is reused as the price sample for MFE/MAE.
+    //
+    // This prevents every passing candidate from generating ~60+
+    // RPC requests during the 60-second research window.
+    const observationIntervals = [5000, 15000, 30000, 60000];
+
+    const observations: ForwardObservation[] = [];
+    const timers: NodeJS.Timeout[] = [];
+    const startTime = Date.now();
+    const tokenMint = snapshotData.tokenMint ?? candidate.id;
+
+    // Create the ENTRY SNAPSHOT (baseline for all forward observations).
+    const snapshot: PassingCandidateSnapshot = {
+      tokenMint,
+      timestamp: startTime,
+      price: snapshotData.price ?? 0,
+      liquiditySol: snapshotData.liquiditySol ?? 0,
+      depthSol: snapshotData.depthSol ?? 0,
+      riskScore: snapshotData.riskScore ?? 0,
+      momentumConfirmed: snapshotData.momentumConfirmed ?? false,
+      volume24h: snapshotData.volume24h ?? 0,
+      volumeChange5m: snapshotData.volumeChange5m ?? 0,
+      buyPressure: snapshotData.buyPressure ?? 0,
+      sellPressure: snapshotData.sellPressure ?? 0,
+      flowBuyPressure: snapshotData.flowBuyPressure ?? 0,
+      holderCount: snapshotData.holderCount ?? 0,
+      holderGrowth1h: snapshotData.holderGrowth1h ?? 0,
+      tradeCount: snapshotData.tradeCount ?? 0,
+      uniqueTraders: snapshotData.uniqueTraders ?? 0,
+      uniqueBuyers: snapshotData.uniqueBuyers ?? 0,
+      uniqueSellers: snapshotData.uniqueSellers ?? 0,
+      volatility: snapshotData.volatility ?? 0,
+      priceChange5m: snapshotData.priceChange5m ?? 0,
+      quoteAgeMs: snapshotData.quoteAgeMs ?? 0,
+      priceImpactBps: snapshotData.priceImpactBps ?? 0,
+      source: snapshotData.source ?? 'unknown',
+      isPumpFun: snapshotData.isPumpFun ?? false,
+    };
+
+    // Record the entry snapshot immediately.
+    try {
+      const recorder = this.mayhemEngine.getResearchRecorder();
+      if (typeof recorder.recordPassingCandidateSnapshot === 'function') {
+        recorder.recordPassingCandidateSnapshot(snapshot);
+      }
+    } catch (error) {
+      logger.warn('PASSING_CANDIDATE_SNAPSHOT_RECORD_FAILED', {
+        candidateId: candidate.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const outcomePromise = new Promise<PassingCandidateOutcome>((resolve, reject) => {
+      this.passingCandidateObservations.set(candidate.tokenMint, {
+        snapshot,
+        observations,
+        priceSamples: [],
+        timers,
+        sampleTimer: null,
+        resolve,
+        reject,
+      });
+
+      // --------------------------------------------------------
+      // FINALIZE
+      // --------------------------------------------------------
+
+      const finalize = () => {
+        const obsState = this.passingCandidateObservations.get(candidate.tokenMint);
+
+        const priceSamples = obsState?.priceSamples ?? [];
+        const entryPrice = snapshot.price;
+
+        // Stop every remaining observation timer.
+        for (const timer of timers) {
+          clearTimeout(timer);
+        }
+
+        // Calculate final research metrics.
+        snapshot.mfePct = this.calculateMaxPriceGainFromSamples(
+          priceSamples,
+          entryPrice
+        );
+
+        snapshot.maePct = this.calculateMaxPriceLossFromSamples(
+          priceSamples,
+          entryPrice
+        );
+
+        snapshot.finalPriceChangePct =
+          observations.length > 0
+            ? observations[observations.length - 1]!.priceChangePct
+            : 0;
+
+        // Persist completed snapshot.
+        try {
+          const recorder = this.mayhemEngine.getResearchRecorder();
+          if (typeof recorder.recordPassingCandidateSnapshot === 'function') {
+            recorder.recordPassingCandidateSnapshot(snapshot);
+          }
+        } catch (error) {
+          logger.warn('PASSING_CANDIDATE_COMPLETED_SNAPSHOT_RECORD_FAILED', {
+            candidateId: candidate.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+
+        const outcome: PassingCandidateOutcome = {
+          snapshot,
+          observations: [...observations],
+          maxPriceGainPct: this.calculateMaxPriceGainFromSamples(
+            priceSamples,
+            entryPrice
+          ),
+          maxPriceLossPct: this.calculateMaxPriceLossFromSamples(
+            priceSamples,
+            entryPrice
+          ),
+          finalPriceChangePct:
+            observations.length > 0
+              ? observations[observations.length - 1]!.priceChangePct
+              : 0,
+          reachedProfitTarget: observations.some(
+            obs => obs.priceChangePct >= 3
+          ),
+          hitStopLoss: observations.some(
+            obs => obs.priceChangePct <= -15
+          ),
+        };
+
+        // Persist outcome.
+        try {
+          this.mayhemEngine
+            .getResearchRecorder()
+            .recordPassingCandidateOutcome(outcome);
+        } catch (error) {
+          logger.warn('PASSING_CANDIDATE_OUTCOME_RECORD_FAILED', {
+            candidateId: candidate.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+
+        if (obsState) {
+          obsState.resolve(outcome);
+        }
+
+        this.passingCandidateObservations.delete(candidate.tokenMint);
+      };
+
+      // --------------------------------------------------------
+      // SCHEDULE 5s / 15s / 30s / 60s
+      // --------------------------------------------------------
+
+      observationIntervals.forEach((delayMs, index) => {
+        const timer = setTimeout(async () => {
+          try {
+            /*
+             * EXACTLY ONE RPC/quote request for this observation.
+             *
+             * Do NOT call collectPriceSample() here.
+             * collectPriceSample() previously called getValidatedQuote()
+             * a second time and doubled the RPC load.
+             */
+            const observation =
+              await this.collectForwardObservationWithHistory(
+                tokenMint,
+                startTime,
+                delayMs,
+                snapshot
+              );
+
+            observations.push(observation);
+
+            // Populate exact forward-price fields.
+            if (delayMs === 5000) {
+              snapshot.price5s = observation.price;
+            } else if (delayMs === 15000) {
+              snapshot.price15s = observation.price;
+            } else if (delayMs === 30000) {
+              snapshot.price30s = observation.price;
+            } else if (delayMs === 60000) {
+              snapshot.price60s = observation.price;
+            }
+
+            // Record the observation.
+            try {
+              this.mayhemEngine
+                .getResearchRecorder()
+                .recordPassingCandidateObservation(observation);
+            } catch (error) {
+              logger.warn('FORWARD_OBSERVATION_RECORD_FAILED', {
+                candidateId: candidate.id,
+                delayMs,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+
+            // 60-second observation completes the research chain.
+            if (index === observationIntervals.length - 1) {
+              finalize();
+            }
+          } catch (error) {
+            logger.error('FORWARD_OBSERVATION_COLLECTION_FAILED', {
+              candidateId: candidate.id,
+              delayMs,
+              error: this.toErrorMessage(error),
+            });
+
+            // If final observation fails, finalize using whatever
+            // valid observations were successfully collected.
+            if (index === observationIntervals.length - 1) {
+              finalize();
+            }
+          }
+        }, delayMs);
+
+        timers.push(timer);
+
+        // Keep the timer collection synchronized with observation state.
+        const obsState = this.passingCandidateObservations.get(candidate.tokenMint);
+        if (obsState) {
+          obsState.timers = timers;
+        }
+      });
+    });
+
+    // Fire-and-forget: research must never block candidate evaluation.
+    outcomePromise.catch(error => {
+      logger.error('PASSING_CANDIDATE_OBSERVATION_PROMISE_FAILED', {
+        candidateId: candidate.id,
+        error: this.toErrorMessage(error),
+      });
+
+      const obsState =
+        this.passingCandidateObservations.get(candidate.tokenMint);
+
+      if (obsState) {
+        for (const timer of obsState.timers ?? []) {
+          clearTimeout(timer);
+        }
+
+        if (obsState.sampleTimer) {
+          clearInterval(obsState.sampleTimer);
+        }
+
+        this.passingCandidateObservations.delete(candidate.tokenMint);
+      }
+    });
+  }
+
+  /**
+   * Collect a forward observation at a specific delay after snapshot, using historical price samples
+   * to calculate MFE/MAE for the window.
+   */
+  private async collectForwardObservationWithHistory(
+    tokenMint: string,
+    snapshotTime: number,
+    delayMs: number,
+    snapshot: PassingCandidateSnapshot
+  ): Promise<ForwardObservation> {
+    const observationTime = Date.now();
+
+    /*
+     * ONE quote request per observation.
+     *
+     * The returned quote is also inserted directly into priceSamples.
+     * This replaces the old pattern:
+     *
+     *   getValidatedQuote()
+     *   +
+     *   collectPriceSample()
+     *
+     * which caused TWO quote requests for every observation.
+     */
+    const quote = await this.getValidatedQuote(tokenMint);
+
+    if (!quote) {
+      return {
+        tokenMint,
+        observationTime,
+        delayMs,
+        price: 0,
+        priceChangePct: 0,
+        mfePct: 0,
+        maePct: 0,
+        volumeChangePct: 0,
+        holderCount: 0,
+        holderChangePct: 0,
+        buyPressure: 0,
+        sellPressure: 0,
+        flowBuyPressure: 0,
+        liquiditySol: 0,
+        depthSol: 0,
+        quoteAgeMs: 0,
+        priceImpactBps: 0,
+        volatility: 0,
+      };
+    }
+
+    // Reuse the SAME quote for MFE/MAE sampling.
+    const observationState =
+      this.passingCandidateObservations.get(tokenMint);
+
+    if (observationState) {
+      observationState.priceSamples.push({
+        price: quote.price,
+        timestamp: observationTime,
+      });
+    }
+
+    // Calculate MFE/MAE from all samples collected so far.
+    const priceSamples = observationState?.priceSamples ?? [];
+
+    const windowSamples = priceSamples.filter(
+      sample =>
+        sample.timestamp >= snapshotTime &&
+        sample.timestamp <= observationTime
+    );
+
+    let mfePct = 0;
+    let maePct = 0;
+
+    if (windowSamples.length > 0 && snapshot.price > 0) {
+      const prices = windowSamples.map(sample => sample.price);
+
+      const maxPrice = Math.max(...prices);
+      const minPrice = Math.min(...prices);
+
+      mfePct =
+        ((maxPrice - snapshot.price) / snapshot.price) * 100;
+
+      maePct =
+        ((snapshot.price - minPrice) / snapshot.price) * 100;
+
+      if (mfePct < 0) {
+        mfePct = 0;
+      }
+
+      if (maePct < 0) {
+        maePct = 0;
+      }
+    }
+
+    const priceChangePct =
+      snapshot.price > 0
+        ? ((quote.price - snapshot.price) / snapshot.price) * 100
+        : 0;
+
+    return {
+      tokenMint,
+      observationTime,
+      delayMs,
+      price: quote.price,
+      priceChangePct,
+      mfePct,
+      maePct,
+      volumeChangePct: 0,
+      holderCount: snapshot.holderCount,
+      holderChangePct: 0,
+      buyPressure: snapshot.buyPressure,
+      sellPressure: snapshot.sellPressure,
+      flowBuyPressure: snapshot.flowBuyPressure,
+      liquiditySol: snapshot.liquiditySol,
+      depthSol: snapshot.depthSol,
+      quoteAgeMs: Math.max(0, Date.now() - quote.timestamp),
+      priceImpactBps: quote.priceImpactBps ?? 0,
+      volatility: snapshot.volatility,
+    };
+  }
+
+  /**
+   * Calculate maximum price gain from observations
+   */
+  private calculateMaxPriceGain(observations: ForwardObservation[]): number {
+    if (observations.length === 0) return 0;
+    return Math.max(...observations.map(o => o.priceChangePct));
+  }
+
+  /**
+   * Calculate maximum price loss from observations
+   */
+  private calculateMaxPriceLoss(observations: ForwardObservation[]): number {
+    if (observations.length === 0) return 0;
+    return Math.min(...observations.map(o => o.priceChangePct));
+  }
+
+  /**
+   * Calculate maximum price gain from price samples
+   */
+  private calculateMaxPriceGainFromSamples(priceSamples: { price: number; timestamp: number }[], entryPrice: number): number {
+    if (priceSamples.length === 0 || entryPrice <= 0) return 0;
+
+    const prices = priceSamples.map(s => s.price);
+    const maxPrice = Math.max(...prices);
+    return ((maxPrice - entryPrice) / entryPrice) * 100;
+  }
+
+  /**
+   * Calculate maximum price loss from price samples
+   */
+  private calculateMaxPriceLossFromSamples(priceSamples: { price: number; timestamp: number }[], entryPrice: number): number {
+    if (priceSamples.length === 0 || entryPrice <= 0) return 0;
+
+    const prices = priceSamples.map(s => s.price);
+    const minPrice = Math.min(...prices);
+    return ((entryPrice - minPrice) / entryPrice) * 100;
+  }
+
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -1547,4 +2156,34 @@ export class NewLaunchHandler {
   private toErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
   }
-}
+
+  /**
+   * Collect a price sample for the given token and add it to the price samples array
+   * for the passing candidate observation.
+   */
+  private async collectPriceSample(tokenMint: string): Promise<void> {
+    /*
+     * DEPRECATED FOR PASSING-CANDIDATE RESEARCH.
+     *
+     * The forward observer now samples using the exact quote already
+     * fetched by collectForwardObservationWithHistory().
+     *
+     * Intentionally no RPC request is made here.
+     *
+     * Keeping this method avoids breaking any existing callers while
+     * preventing accidental background RPC polling.
+     */
+    void tokenMint;
+  }
+ }
+
+
+ 
+
+
+
+
+
+
+
+

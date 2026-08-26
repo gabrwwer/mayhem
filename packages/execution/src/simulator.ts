@@ -1,6 +1,9 @@
 
+// The execution package can be type-checked independently of the Solana
+// adapter package, where web3.js is provided as an optional dependency.
 import { Connection, PublicKey, Transaction } from '@solana/web3.js';
 import { QuoteResult, TransactionResult } from '@mayhem/solana';
+import Decimal from 'decimal.js';
 import { readBondingCurve } from './pumpfun';
 
 export interface SimulatorConfig {
@@ -102,11 +105,14 @@ export class SimulatedExecutionEngine {
               mint: tokenMint,
               failures: this.priceFailures,
               error: error instanceof Error ? error.message : String(error),
-              note: 'falling back to a constant price; momentum and P&L are meaningless until fixed',
+              note: 'no synthetic price fallback is used in RPC-backed mode',
             }),
           );
         }
       }
+    }
+    if (this.config.rpcUrl) {
+      throw new Error(`No valid price available for ${tokenMint}`);
     }
     return this.prices.get(tokenMint) ?? 0.001;
   }
@@ -179,6 +185,7 @@ export class SimulatedExecutionEngine {
      * class of silently-mispriced tokens.
      */
     {
+      let curveTimeoutId: ReturnType<typeof setTimeout> | undefined;
       /*
        * Price from the BONDING CURVE, not the pump.fun HTTP API.
        *
@@ -203,7 +210,7 @@ export class SimulatedExecutionEngine {
             new PublicKey(tokenMint),
           ),
           new Promise<null>((_, reject) =>
-            setTimeout(() => reject(new Error('RPC timeout')), 5000)
+            curveTimeoutId = setTimeout(() => reject(new Error('RPC timeout')), 5000)
           ),
         ]);
 
@@ -221,6 +228,8 @@ export class SimulatedExecutionEngine {
         }
       } catch (err) {
         // RPC timeout or error; fall through to Jupiter API
+      } finally {
+        if (curveTimeoutId !== undefined) clearTimeout(curveTimeoutId);
       }
     }
 
@@ -235,16 +244,20 @@ export class SimulatedExecutionEngine {
     const timeoutId = setTimeout(() => controller.abort(), 5000);
 
     try {
-      const resp = await fetch(`https://quote-api.jup.ag/v6/quote?${params}`, {
+      const resp = await fetch(`https://lite-api.jup.ag/swap/v1/quote?${params.toString()}`, {
         signal: controller.signal,
       });
       if (resp.ok) {
         const data = await resp.json() as { outAmount?: string };
         if (data.outAmount) {
           const outTokens = Number(data.outAmount) / 1e6;
-          const price = 0.001 / outTokens;
-          this.prices.set(tokenMint, price);
-          return price;
+          if (Number.isFinite(outTokens) && outTokens > 0) {
+            const price = 0.001 / outTokens;
+            if (Number.isFinite(price) && price > 0) {
+              this.prices.set(tokenMint, price);
+              return price;
+            }
+          }
         }
       }
     } finally {
@@ -296,25 +309,26 @@ export class SimulatedExecutionEngine {
 
   async quoteBuy(
     tokenMint: string,
-    amountSol: number,
+    amountSol: string,
   ): Promise<QuoteResult> {
-    const price = this.prices.get(tokenMint) ?? 0.001;
+    const price = this.getQuotePrice(tokenMint);
+    const amount = new Decimal(amountSol);
 
     const slippageMultiplier =
       1 + this.config.slippageBps / 10_000;
 
     const effectivePrice = price * slippageMultiplier;
-    const outputAmount = amountSol / effectivePrice;
-    const priceImpact = (amountSol / 100) * 0.5;
+    const outputAmount = amount.div(effectivePrice);
+    const priceImpact = amount.div(100).times(0.5);
 
     return {
       inputMint:
         'So11111111111111111111111111111111111111112',
       outputMint: tokenMint,
-      inputAmount: amountSol,
-      outputAmount,
-      pricePerToken: effectivePrice,
-      priceImpactPct: Math.min(priceImpact, 50),
+      inputAmount: amount.toFixed(),
+      outputAmount: outputAmount.toFixed(),
+      pricePerToken: new Decimal(effectivePrice).toFixed(),
+      priceImpactPct: Decimal.min(priceImpact, 50).toFixed(),
       slippageBps: this.config.slippageBps,
       route: 'simulated-paper',
     };
@@ -322,28 +336,38 @@ export class SimulatedExecutionEngine {
 
   async quoteSell(
     tokenMint: string,
-    amountToken: number,
+    amountToken: string,
   ): Promise<QuoteResult> {
-    const price = this.prices.get(tokenMint) ?? 0.001;
+    const price = this.getQuotePrice(tokenMint);
+    const amount = new Decimal(amountToken);
 
     const slippageMultiplier =
       1 - this.config.slippageBps / 10_000;
 
     const effectivePrice = price * slippageMultiplier;
-    const outputAmount = amountToken * effectivePrice;
-    const priceImpact = (outputAmount / 100) * 0.5;
+    const outputAmount = amount.times(effectivePrice);
+    const priceImpact = outputAmount.div(100).times(0.5);
 
     return {
       inputMint: tokenMint,
       outputMint:
         'So11111111111111111111111111111111111111112',
-      inputAmount: amountToken,
-      outputAmount,
-      pricePerToken: effectivePrice,
-      priceImpactPct: Math.min(priceImpact, 50),
+      inputAmount: amount.toFixed(),
+      outputAmount: outputAmount.toFixed(),
+      pricePerToken: new Decimal(effectivePrice).toFixed(),
+      priceImpactPct: Decimal.min(priceImpact, 50).toFixed(),
       slippageBps: this.config.slippageBps,
       route: 'simulated-paper',
     };
+  }
+
+  private getQuotePrice(tokenMint: string): number {
+    const price = this.prices.get(tokenMint);
+    if (price !== undefined) return price;
+    if (this.config.rpcUrl) {
+      throw new Error(`No current price cached for ${tokenMint}`);
+    }
+    return 0.001;
   }
 
   /**
@@ -403,7 +427,7 @@ export class SimulatedExecutionEngine {
         status: 'failed',
         slot: Math.floor(Math.random() * 1_000_000),
         error: 'Simulated transaction failure',
-        fees: 0,
+        fees: '0',
       };
 
       this.tradeLog.push(result);
@@ -411,47 +435,47 @@ export class SimulatedExecutionEngine {
     }
 
     if (isBuy) {
-      if (this.solBalance < quote.inputAmount) {
+      if (this.solBalance < Number(quote.inputAmount)) {
         const result: TransactionResult = {
           signature:
             'sim-nsf-' + Date.now().toString(36),
           status: 'failed',
           slot: 0,
           error: 'Insufficient SOL balance',
-          fees: 0,
+          fees: '0',
         };
 
         this.tradeLog.push(result);
         return result;
       }
 
-      this.solBalance -= quote.inputAmount;
+      this.solBalance -= Number(quote.inputAmount);
 
       const current =
         this.tokenBalances.get(quote.outputMint) ?? 0;
 
       this.tokenBalances.set(
         quote.outputMint,
-        current + quote.outputAmount,
+        current + Number(quote.outputAmount),
       );
 
       // Establish the market price used by getPrice().
       this.setPrice(
         quote.outputMint,
-        quote.pricePerToken,
+        Number(quote.pricePerToken),
       );
     } else {
       const currentTokens =
         this.tokenBalances.get(quote.inputMint) ?? 0;
 
-      if (currentTokens < quote.inputAmount) {
+      if (currentTokens < Number(quote.inputAmount)) {
         const result: TransactionResult = {
           signature:
             'sim-nsf-' + Date.now().toString(36),
           status: 'failed',
           slot: 0,
           error: 'Insufficient token balance',
-          fees: 0,
+          fees: '0',
         };
 
         this.tradeLog.push(result);
@@ -460,10 +484,10 @@ export class SimulatedExecutionEngine {
 
       this.tokenBalances.set(
         quote.inputMint,
-        currentTokens - quote.inputAmount,
+        currentTokens - Number(quote.inputAmount),
       );
 
-      this.solBalance += quote.outputAmount;
+      this.solBalance += Number(quote.outputAmount);
     }
 
     const simulatedFees = 0.000005;
@@ -479,7 +503,7 @@ export class SimulatedExecutionEngine {
       status: 'confirmed',
       slot: Math.floor(Math.random() * 1_000_000),
       error: null,
-      fees: simulatedFees,
+      fees: new Decimal(simulatedFees).toFixed(),
       // Report executed amounts so the trading engine books P&L from the
       // fill rather than falling back to quote-based estimation. In paper
       // trading the fill equals the quote; the point is that the *contract*
@@ -494,9 +518,9 @@ export class SimulatedExecutionEngine {
         isBuy ? 'BUY' : 'SELL'
       } ${
         isBuy
-          ? quote.outputAmount.toFixed(4)
-          : quote.inputAmount.toFixed(4)
-      } tokens @ ${quote.pricePerToken.toFixed(8)} | SOL balance: ${this.solBalance.toFixed(4)}`,
+          ? new Decimal(quote.outputAmount).toFixed(4)
+          : new Decimal(quote.inputAmount).toFixed(4)
+      } tokens @ ${new Decimal(quote.pricePerToken).toFixed(8)} | SOL balance: ${this.solBalance.toFixed(4)}`,
     );
 
     this.tradeLog.push(result);

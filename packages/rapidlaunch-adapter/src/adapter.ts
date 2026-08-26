@@ -90,13 +90,15 @@ export class RapidLaunchAdapter {
     }
 
     const response = await fetch(`${this.config.apiUrl}${path}`, { headers });
-    if (!response.ok) {
-      this.lastError = `RapidLaunch API error: ${response.status} ${response.statusText}`;
+    if (!(response as unknown as { ok: boolean }).ok) {
+      const status = (response as { status?: number }).status ?? 'unknown';
+      const statusText = (response as { statusText?: string }).statusText ?? '';
+      this.lastError = `RapidLaunch API error: ${status} ${statusText}`;
       throw new Error(this.lastError);
     }
 
     this.lastSync = new Date();
     this.lastError = null;
-    return response.json() as Promise<T>;
+    return (response as unknown as { json: () => Promise<T> }).json();
   }
 }

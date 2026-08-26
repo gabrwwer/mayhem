@@ -62,7 +62,7 @@ export function createAuthMiddleware(options: AuthOptions) {
       return;
     }
 
-    const authorization = req.headers.authorization;
+    const authorization = req.get('authorization');
     const provided = authorization?.startsWith('Bearer ')
       ? authorization.slice('Bearer '.length).trim()
       : undefined;

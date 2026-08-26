@@ -1,11 +1,12 @@
-
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "lib": ["ES2022", "DOM"],
     "rootDir": "./src",
     "outDir": "./dist"
   },
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts"],
-  "references": [{ "path": "../solana/tsconfig.build.json" }]
+  "references": [{ "path": "../solana/tsconfig.build.json" }],
+  "types": ["node", "vitest/globals"]
 }

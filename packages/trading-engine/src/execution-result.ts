@@ -12,15 +12,24 @@ export interface ExecutionResult {
   signature: string;
   status: ExecutionStatus;
   error?: string | null;
-  fees?: number;
+  /** Human-readable SOL fee as an exact decimal string. */
+  fees?: string;
+  /** Raw fee paid by the transaction, in lamports. */
+  feesLamports?: bigint;
 
   /**
    * Amounts the transaction actually executed, read back from the confirmed
    * transaction. Position quantity and realised P&L must be derived from
    * these rather than from the pre-trade quote.
    */
-  filledInputAmount?: number;
-  filledOutputAmount?: number;
+  /** Human-readable executed input amount as an exact decimal string. */
+  filledInputAmount?: string;
+  /** Human-readable executed output amount as an exact decimal string. */
+  filledOutputAmount?: string;
+  /** Raw executed input amount in base units, when available. */
+  filledInputRawAmount?: bigint;
+  /** Raw executed output amount in base units, when available. */
+  filledOutputRawAmount?: bigint;
 }
 
 /**

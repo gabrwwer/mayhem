@@ -1,5 +1,5 @@
 
-export * from './constants';
-export * from './connection';
-export * from './wallet';
-export * from './types';
+export * from './constants.js';
+export * from './connection.js';
+export * from './wallet.js';
+export * from './types.js';

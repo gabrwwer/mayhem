@@ -1,5 +1,13 @@
-
 packages:
   - "apps/*"
   - "packages/*"
   - "services/*"
+
+allowBuilds:
+  bigint-buffer: true
+  bufferutil: true
+  esbuild: true
+  utf-8-validate: true
+
+overrides:
+  picomatch: 4.0.5

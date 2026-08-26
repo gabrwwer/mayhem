@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "pnpm -w exec vitest run --config ./vitest.config.mts --passWithNoTests ./apps/dashboard"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -20,8 +20,8 @@
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "esbuild": "^0.28.2",
     "typescript": "^5.5.4",
-    "vite": "^5.4.2",
-    "vitest": "^2.0.5"
+    "vite": "^5.4.2"
   }
 }

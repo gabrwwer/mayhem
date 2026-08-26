@@ -14,6 +14,7 @@
  */
 
 import { MayhemEngine, PositionManager } from '@mayhem/trading-engine';
+import { parseAmount } from '../../packages/trading-engine/src/calculations';
 import type { TradingConfig } from '@mayhem/trading-engine';
 
 const config: TradingConfig = {
@@ -73,12 +74,12 @@ describe('first-buy sizing on a zero-depth bonding curve', () => {
   });
 
   it('sizes a measured-zero curve at the fixed budget', () => {
-    const signal = engine.evaluateToken('MINT_LAUNCH', 0.0000001, 0, 85, {
+    const signal = engine.evaluateToken('MINT_LAUNCH', '0.0000001', '0', 85, {
       depthMeasured: true,
     });
 
     expect(signal).not.toBeNull();
-    expect(signal!.amount).toBe(config.maxPositionSol);
+    expect(signal!.amount).toBe(String(config.maxPositionSol));
     expect(signal!.reason).toContain('fixed_first_buy');
   });
 
@@ -86,51 +87,51 @@ describe('first-buy sizing on a zero-depth bonding curve', () => {
     // The load-bearing case: "we could not read the curve" must never be
     // treated as "the curve is empty". Regression here reopens the path where
     // an unreadable venue is traded at full size.
-    expect(engine.evaluateToken('MINT_UNKNOWN', 0.0000001, 0, 85)).toBeNull();
+    expect(engine.evaluateToken('MINT_UNKNOWN', '0.0000001', '0', 85)).toBeNull();
     expect(
-      engine.evaluateToken('MINT_UNKNOWN', 0.0000001, 0, 85, { depthMeasured: false }),
+      engine.evaluateToken('MINT_UNKNOWN', '0.0000001', '0', 85, { depthMeasured: false }),
     ).toBeNull();
   });
 
   it('rejects negative or non-finite depth regardless of the flag', () => {
     expect(
-      engine.evaluateToken('MINT_BAD', 0.0000001, -1, 85, { depthMeasured: true }),
+      engine.evaluateToken('MINT_BAD', '0.0000001', '-1', 85, { depthMeasured: true }),
     ).toBeNull();
     expect(
-      engine.evaluateToken('MINT_BAD', 0.0000001, NaN, 85, { depthMeasured: true }),
+      engine.evaluateToken('MINT_BAD', '0.0000001', 'NaN', 85, { depthMeasured: true }),
     ).toBeNull();
     expect(
-      engine.evaluateToken('MINT_BAD', 0.0000001, Infinity, 85, { depthMeasured: true }),
+      engine.evaluateToken('MINT_BAD', '0.0000001', 'Infinity', 85, { depthMeasured: true }),
     ).toBeNull();
   });
 
   it('keeps participation-based sizing wherever depth is positive', () => {
     // 1% of 2 SOL = 0.02, below the 0.05 budget: the cap must still bind.
-    const shallow = engine.evaluateToken('MINT_SHALLOW', 0.001, 2, 85, {
+    const shallow = engine.evaluateToken('MINT_SHALLOW', '0.001', '2', 85, {
       depthMeasured: true,
     });
-    expect(shallow!.amount).toBeCloseTo(0.02, 10);
+    expect(parseAmount(shallow!.amount).equals('0.02')).toBe(true);
     expect(shallow!.reason).toContain('depth_participation');
 
     // 1% of 100 SOL = 1.0, above the budget: maxPositionSol must bind.
-    const deep = engine.evaluateToken('MINT_DEEP', 0.001, 100, 85);
-    expect(deep!.amount).toBe(config.maxPositionSol);
+    const deep = engine.evaluateToken('MINT_DEEP', '0.001', '100', 100);
+    expect(deep!.amount).toBe(String(config.maxPositionSol));
     expect(deep!.reason).toContain('depth_participation');
   });
 
   it('never exceeds maxPositionSol on any path', () => {
     for (const [liquidity, depthMeasured] of [
-      [0, true],
-      [0.0001, true],
-      [2, true],
-      [1_000_000, false],
+      ['0', true],
+      ['0.0001', true],
+      ['2', true],
+      ['1000000', false],
     ] as const) {
-      const signal = engine.evaluateToken('MINT_CAP', 0.001, liquidity, 85, {
+      const signal = engine.evaluateToken('MINT_CAP', '0.001', liquidity, 85, {
         depthMeasured,
       });
       if (signal) {
-        expect(signal.amount).toBeLessThanOrEqual(config.maxPositionSol);
-        expect(signal.amount).toBeGreaterThan(0);
+        expect(parseAmount(signal.amount).lessThanOrEqualTo(String(config.maxPositionSol))).toBe(true);
+        expect(parseAmount(signal.amount).greaterThan(0)).toBe(true);
       }
     }
   });

@@ -1,4 +1,3 @@
-
 export type TipPercentile = 25 | 50 | 75 | 95 | 99;
 
 export interface TipFloorRow {
@@ -42,9 +41,14 @@ export class FeeBudget {
     const cacheMs = this.cfg.cacheMs ?? 30_000;
     if (this.last && now - this.last.at < cacheMs) return this.last.row;
     const url = this.cfg.tipFloorUrl ?? "https://bundles.jito.wtf/api/v1/bundles/tip_floor";
-    const res = await fetch(url, { signal: AbortSignal.timeout(2_000) });
-    if (!res.ok) throw new Error(`tip_floor: HTTP ${res.status}`);
-    const rows = (await res.json()) as TipFloorRow[];
+    const res: Awaited<ReturnType<typeof fetch>> = await fetch(url);
+
+    const status = (res as unknown as { status: number }).status;
+    if (status < 200 || status >= 300) {
+      throw new Error(`tip_floor: HTTP ${status}`);
+    }
+
+    const rows = (await (res as unknown as { json(): Promise<unknown> }).json()) as TipFloorRow[];
     if (rows.length === 0) {
       throw new Error("tip_floor: no data returned");
     }

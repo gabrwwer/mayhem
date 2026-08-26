@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { PublicKey } from '@solana/web3.js';
-import { SolanaTokenProvider } from '../../src/solana-provider';
+import { SolanaTokenProvider } from '../src/solana-provider';
 
 describe('SolanaTokenProvider.parsePumpFills', () => {
-  const provider = new SolanaTokenProvider('https://example.com', { pollingEnabled: false, subscriptionsEnabled: false });
+  const provider = new SolanaTokenProvider('https://example.com', { pollingEnabled: true, subscriptionsEnabled: false, batchSize: 1 });
 
   it('parses a valid pump.fun BUY transaction and extracts mint, buyer, signature, lamports and price', () => {
     const LAMPORTS_PER_SOL = 1_000_000_000;

@@ -26,17 +26,11 @@ export class TokenMonitor {
     provider.onLiquidityChange((change) => {
       for (const callback of this.liquidityCallbacks) {
         try {
-          void Promise.resolve(callback(change)).catch((error: unknown) => {
-            console.warn(
-              '[TokenMonitor] liquidity callback failed:',
-              error instanceof Error ? error.message : String(error),
-            );
+          void Promise.resolve(callback(change)).catch(() => {
+            // Keep callback failures isolated from the monitor.
           });
         } catch (error) {
-          console.warn(
-            '[TokenMonitor] liquidity callback failed:',
-            error instanceof Error ? error.message : String(error),
-          );
+          // Keep callback failures isolated from the monitor.
         }
       }
     });
@@ -124,11 +118,8 @@ export class TokenMonitor {
     for (const callback of this.tokenCallbacks) {
       try {
         await callback(event);
-      } catch (error) {
-        console.warn(
-          `[TokenMonitor] token callback failed mint=${event.tokenMint}:`,
-          error instanceof Error ? error.message : String(error),
-        );
+      } catch {
+        // Keep callback failures isolated from the monitor.
       }
     }
   }

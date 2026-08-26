@@ -1,9 +1,0 @@
-
-> @mayhem/trading-engine@0.1.0 build C:\dev\mayhem\mq\packages\trading-engine
-> tsc --build tsconfig.build.json
-
-src/engine.ts(287,7): error TS2353: Object literal may only specify known properties, and 'entryLiquidity' does not exist in type 'TradeSignal'.
-src/engine.ts(456,16): error TS2339: Property 'entryLiquidity' does not exist on type 'TradeSignal'.
-C:\dev\mayhem\mq\packages\trading-engine:
-ΓÇëERR_PNPM_RECURSIVE_RUN_FIRST_FAILΓÇë @mayhem/trading-engine@0.1.0 build: `tsc --build tsconfig.build.json`
-Exit status 1

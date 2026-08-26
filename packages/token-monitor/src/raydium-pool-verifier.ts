@@ -1,7 +1,3 @@
-import {
-  CpmmPoolInfoLayout,
-  liquidityStateV4Layout,
-} from '@raydium-io/raydium-sdk-v2';
 import { Connection, PublicKey } from '@solana/web3.js';
 import {
   RAYDIUM_AMM_V4,
@@ -31,6 +27,23 @@ const RAYDIUM_CPMM_PROGRAM_ID = RAYDIUM_CPMM.toBase58();
 const WSOL_MINT = SOL_MINT;
 const SPL_TOKEN_PROGRAM_ID = TOKEN_PROGRAM.toBase58();
 const TOKEN_2022_PROGRAM_ID = TOKEN_2022_PROGRAM.toBase58();
+
+const AMM_V4_ACCOUNT_LENGTH = 752;
+const AMM_V4_BASE_VAULT_OFFSET = 336;
+const AMM_V4_QUOTE_VAULT_OFFSET = 368;
+const AMM_V4_BASE_MINT_OFFSET = 400;
+const AMM_V4_QUOTE_MINT_OFFSET = 432;
+const AMM_V4_LP_MINT_OFFSET = 464;
+
+const CPMM_MIN_ACCOUNT_LENGTH = 264;
+const CPMM_TOKEN_0_VAULT_OFFSET = 104;
+const CPMM_TOKEN_1_VAULT_OFFSET = 136;
+const CPMM_LP_MINT_OFFSET = 168;
+const CPMM_TOKEN_0_MINT_OFFSET = 200;
+const CPMM_TOKEN_1_MINT_OFFSET = 232;
+
+const publicKeyAt = (data: Uint8Array, offset: number): string =>
+  new PublicKey(data.subarray(offset, offset + 32)).toBase58();
 
 export type RaydiumPoolType = 'amm-v4' | 'cpmm';
 
@@ -221,7 +234,7 @@ export class RaydiumPoolVerifier {
     }
   }
 
-  private decodeAmmV4(data: Buffer): {
+  private decodeAmmV4(data: Uint8Array): {
     mintA: string;
     mintB: string;
     vaultA: string;
@@ -229,25 +242,23 @@ export class RaydiumPoolVerifier {
     lpMint: string;
   } | null {
     try {
-      if (data.length !== liquidityStateV4Layout.span) {
+      if (data.length !== AMM_V4_ACCOUNT_LENGTH) {
         return null;
       }
 
-      const state = liquidityStateV4Layout.decode(data);
-
       return {
-        mintA: state.baseMint.toBase58(),
-        mintB: state.quoteMint.toBase58(),
-        vaultA: state.baseVault.toBase58(),
-        vaultB: state.quoteVault.toBase58(),
-        lpMint: state.lpMint.toBase58(),
+        mintA: publicKeyAt(data, AMM_V4_BASE_MINT_OFFSET),
+        mintB: publicKeyAt(data, AMM_V4_QUOTE_MINT_OFFSET),
+        vaultA: publicKeyAt(data, AMM_V4_BASE_VAULT_OFFSET),
+        vaultB: publicKeyAt(data, AMM_V4_QUOTE_VAULT_OFFSET),
+        lpMint: publicKeyAt(data, AMM_V4_LP_MINT_OFFSET),
       };
     } catch {
       return null;
     }
   }
 
-  private decodeCpmm(data: Buffer): {
+  private decodeCpmm(data: Uint8Array): {
     mintA: string;
     mintB: string;
     vaultA: string;
@@ -255,18 +266,16 @@ export class RaydiumPoolVerifier {
     lpMint: string;
   } | null {
     try {
-      if (data.length !== CpmmPoolInfoLayout.span) {
+      if (data.length < CPMM_MIN_ACCOUNT_LENGTH) {
         return null;
       }
 
-      const state = CpmmPoolInfoLayout.decode(data);
-
       return {
-        mintA: state.mintA.toBase58(),
-        mintB: state.mintB.toBase58(),
-        vaultA: state.vaultA.toBase58(),
-        vaultB: state.vaultB.toBase58(),
-        lpMint: state.mintLp.toBase58(),
+        mintA: publicKeyAt(data, CPMM_TOKEN_0_MINT_OFFSET),
+        mintB: publicKeyAt(data, CPMM_TOKEN_1_MINT_OFFSET),
+        vaultA: publicKeyAt(data, CPMM_TOKEN_0_VAULT_OFFSET),
+        vaultB: publicKeyAt(data, CPMM_TOKEN_1_VAULT_OFFSET),
+        lpMint: publicKeyAt(data, CPMM_LP_MINT_OFFSET),
       };
     } catch {
       return null;

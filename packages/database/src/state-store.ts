@@ -28,6 +28,49 @@ CREATE TABLE IF NOT EXISTS ${ENGINE_STATE_TABLE} (
 
 export const BREAKER_STATE_KEY = "circuit_breaker";
 export const OPEN_POSITIONS_KEY = "open_positions";
+export const UNRESOLVED_ORDERS_KEY = "unresolved_orders";
+export const LAST_RECONCILIATION_KEY = "last_reconciliation";
+
+export interface ReconciliationState {
+  timestamp: number;
+  ordersReconciled: number;
+  bundlesChecked: number;
+  durationMs: number;
+}
+
+export type PersistedOrderState =
+  | "prepared"
+  | "submitted"
+  | "landed"
+  | "confirmed"
+  | "partially_filled"
+  | "failed"
+  | "ambiguous"
+  | "reconciled";
+
+export interface PersistedOrder {
+  orderId: string;
+  mint: string;
+  side: "buy" | "sell";
+  state: PersistedOrderState;
+  placedAt: number;
+  bundleId?: string;
+  transactionSignature?: string;
+  requestedQuantity: string;
+  filledQuantity?: string;
+  requestedPositionSol?: string;
+  actualSolSpent?: string;
+  actualSolReceived?: string;
+  feesLamports?: string;
+  feesSol?: string;
+  submittedAt?: number;
+  landedAt?: number;
+  confirmedAt?: number;
+  lastReconciledAt?: number;
+  retryCount: number;
+  reconciliationState: "unreconciled" | "reconciling" | "reconciled" | "failed";
+  errorCode?: string;
+}
 
 export class EngineStateRepository {
   constructor(private readonly db: DatabaseClient) {}
@@ -64,6 +107,14 @@ export class EngineStateRepository {
       `DELETE FROM ${ENGINE_STATE_TABLE} WHERE key = $1`,
       [key],
     );
+  }
+
+  async getLastReconciliation(): Promise<ReconciliationState | null> {
+    return this.get<ReconciliationState>(LAST_RECONCILIATION_KEY);
+  }
+
+  async saveReconciliation(state: ReconciliationState): Promise<void> {
+    await this.put(LAST_RECONCILIATION_KEY, state);
   }
 }
 
@@ -102,5 +153,24 @@ export class PostgresPositionStore<T = unknown> {
 
   async saveOpen(positions: T[]): Promise<void> {
     await this.repo.put(OPEN_POSITIONS_KEY, positions);
+  }
+}
+
+/**
+ * Postgres-backed unresolved-order store. It uses the same engine_state
+ * document store as breaker and position state; there is no competing
+ * persistence backend for execution state.
+ */
+export class PostgresOrderStore {
+  constructor(private readonly repo: EngineStateRepository) {}
+
+  async load(): Promise<Record<string, PersistedOrder>> {
+    return (
+      (await this.repo.get<Record<string, PersistedOrder>>(UNRESOLVED_ORDERS_KEY)) ?? {}
+    );
+  }
+
+  async save(orders: Record<string, PersistedOrder>): Promise<void> {
+    await this.repo.put(UNRESOLVED_ORDERS_KEY, orders);
   }
 }

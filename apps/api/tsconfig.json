@@ -3,9 +3,16 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
-    "noEmit": false
+    "noEmit": false,
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "esModuleInterop": true,
+    "paths": {
+      "express-serve-static-core": [
+        "../../node_modules/.pnpm/@types+express-serve-static-core@4.19.9/node_modules/@types/express-serve-static-core/index.d.ts"
+      ]
+    }
   },
-  "include": [
-    "src"
-  ]
+  "include": ["src"],
+  "exclude": ["**/*.test.ts", "**/*.spec.ts"]
 }
