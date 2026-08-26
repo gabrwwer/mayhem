@@ -23,7 +23,7 @@
     "clean": "tsc --build tsconfig.build.json --clean"
   },
   "dependencies": {
-    "zod": "3.25.76"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "vitest": "4.1.10"
