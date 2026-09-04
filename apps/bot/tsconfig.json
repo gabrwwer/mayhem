@@ -12,14 +12,14 @@
     "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
 
     "paths": {
-      "@mayhem/config": ["../../packages/config/dist"],
-      "@mayhem/database": ["../../packages/database/dist"],
-      "@mayhem/solana": ["../../packages/solana/dist"],
-      "@mayhem/trading-engine": ["../../packages/trading-engine/dist"],
-      "@mayhem/risk-engine": ["../../packages/risk-engine/dist"],
-      "@mayhem/token-monitor": ["../../packages/token-monitor/dist"],
-      "@mayhem/rapidlaunch-adapter": ["../../packages/rapidlaunch-adapter/dist"],
-      "@mayhem/execution": ["../../packages/execution/dist"]
+      "@mayhem/config": ["../../packages/config/src"],
+      "@mayhem/database": ["../../packages/database/src"],
+      "@mayhem/solana": ["../../packages/solana/src"],
+      "@mayhem/trading-engine": ["../../packages/trading-engine/src"],
+      "@mayhem/risk-engine": ["../../packages/risk-engine/src"],
+      "@mayhem/token-monitor": ["../../packages/token-monitor/src"],
+      "@mayhem/rapidlaunch-adapter": ["../../packages/rapidlaunch-adapter/src"],
+      "@mayhem/execution": ["../../packages/execution/src"]
     }
   },
   "include": [
