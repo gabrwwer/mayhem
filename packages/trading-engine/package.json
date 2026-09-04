@@ -1,4 +1,3 @@
-
 {
   "name": "@mayhem/trading-engine",
   "version": "0.1.0",
@@ -12,8 +11,8 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
-    ,"./*": "./src/*.ts"
+    },
+    "./*": "./dist/*.js"
   },
   "files": ["dist"],
   "dependencies": {
